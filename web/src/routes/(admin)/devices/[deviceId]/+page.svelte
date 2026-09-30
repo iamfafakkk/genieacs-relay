@@ -303,7 +303,7 @@
 <div class="flex flex-col gap-4">
 	<div class="flex flex-wrap items-center justify-between gap-2">
 		<div class="flex min-w-0 items-center gap-2">
-			<Button variant="ghost" size="icon-sm" aria-label="Back to devices" onclick={() => goto('/')}>
+			<Button variant="ghost" size="icon-sm" aria-label="Back to devices" onclick={() => goto('/devices')}>
 				<ArrowLeftIcon />
 			</Button>
 			<div class="min-w-0">

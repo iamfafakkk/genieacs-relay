@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import NetworkIcon from '@lucide/svelte/icons/network';
+	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
@@ -10,9 +11,17 @@
 	import { jobsState } from '$lib/stores/jobs.svelte';
 
 	const items = [
-		{ title: 'Devices', url: '/', icon: GaugeIcon },
+		{ title: 'Dashboard', url: '/', icon: LayoutDashboardIcon },
+		{ title: 'Devices', url: '/devices', icon: GaugeIcon },
 		{ title: 'Jobs', url: '/jobs', icon: ListChecksIcon }
 	];
+
+	// Device detail pages keep the Devices entry highlighted.
+	function isActive(url: string, pathname: string): boolean {
+		if (url === '/') return pathname === '/';
+		if (url === '/devices') return pathname === '/devices' || pathname.startsWith('/devices/');
+		return pathname.startsWith(url);
+	}
 
 	function logout() {
 		setApiKey(null);
@@ -51,9 +60,7 @@
 					{#each items as item (item.url)}
 						<Sidebar.MenuItem>
 							<Sidebar.MenuButton
-								isActive={item.url === '/'
-									? page.url.pathname === '/' || page.url.pathname.startsWith('/devices/')
-									: page.url.pathname.startsWith(item.url)}
+								isActive={isActive(item.url, page.url.pathname)}
 								tooltipContent={item.title}
 							>
 								{#snippet child({ props })}
