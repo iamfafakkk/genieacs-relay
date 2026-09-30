@@ -189,8 +189,10 @@ func TestGetDeviceIDByIP_ResolvesViaConnectionRequestURL(t *testing.T) {
 
 	var q ipQuery
 	require.NoError(t, json.Unmarshal([]byte(captured), &q))
-	require.Len(t, q.Or, 4)
-	clause, ok := q.Or[3][FieldConnectionRequestURL].(map[string]interface{})
+	// summary.ip + every WAN instance path + the ConnectionRequestURL clause.
+	require.Len(t, q.Or, 2+wanConnectionDeviceInstances*wanPPPConnectionInstances*2)
+	last := q.Or[len(q.Or)-1]
+	clause, ok := last[FieldConnectionRequestURL].(map[string]interface{})
 	require.True(t, ok, "expected ConnectionRequestURL clause to carry a $regex map")
 	// Anchored on "//" + the IP + a port/path delimiter so it can't match a
 	// different address (e.g. 10.100.251.2280).

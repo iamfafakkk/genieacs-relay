@@ -54,8 +54,7 @@ func TestWLANPathFormats(t *testing.T) {
 func TestFieldNameConstants(t *testing.T) {
 	// Test field constants used for device IP lookup
 	assert.Equal(t, "summary.ip", FieldSummaryIP)
-	assert.Contains(t, FieldWANPPPConn1, "WANPPPConnection.1")
-	assert.Contains(t, FieldWANPPPConn2, "WANPPPConnection.2")
+	assert.Contains(t, FieldConnectionRequestURL, "ConnectionRequestURL")
 }
 
 func TestTimeoutConstants(t *testing.T) {

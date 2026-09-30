@@ -120,21 +120,20 @@ func getDeviceIDByIP(ctx context.Context, ip string) (string, error) {
 	}
 
 	// Construct query using proper JSON marshaling to prevent injection.
+	// The IP may live on any WANConnectionDevice/WANPPPConnection (and
+	// WANIPConnection) instance — the same subtree the admin device list
+	// reads — so the lookup enumerates the whole grid (see externalIPOr).
 	// The ConnectionRequestURL clause is a fallback for CPEs whose WAN
-	// ExternalIPAddress is blank (e.g. ZTE F670) — the admin device list
-	// already surfaces such an IP via connectionRequestIP, so the {ip}
-	// lookup must resolve it too or every per-device endpoint 404s.
-	// Anchored on "//" so the port/octet suffix can't match a different IP.
-	queryStruct := ipQuery{
-		Or: []map[string]interface{}{
-			{FieldSummaryIP: ip},
-			{FieldWANPPPConn1: ip},
-			{FieldWANPPPConn2: ip},
-			{FieldConnectionRequestURL: map[string]interface{}{
-				"$regex": regexp.QuoteMeta("//"+ip) + `(?:[:/]|$)`,
-			}},
-		},
-	}
+	// ExternalIPAddress is blank (e.g. ZTE F670): the list surfaces such an
+	// IP via connectionRequestIP, so the {ip} lookup must resolve it too or
+	// every per-device endpoint 404s. Anchored on "//" so the port/octet
+	// suffix can't match a different IP.
+	or := []map[string]interface{}{{FieldSummaryIP: ip}}
+	or = append(or, externalIPOr(ip)...)
+	or = append(or, map[string]interface{}{FieldConnectionRequestURL: map[string]interface{}{
+		"$regex": regexp.QuoteMeta("//"+ip) + `(?:[:/]|$)`,
+	}})
+	queryStruct := ipQuery{Or: or}
 
 	queryBytes, err := jsonMarshal(queryStruct)
 	if err != nil {

@@ -218,6 +218,27 @@ func pppoeUsernameOr(value interface{}) []map[string]interface{} {
 	return ors
 }
 
+// externalIPOr returns $or clauses matching a WAN external IP across every
+// WANConnectionDevice / WANPPPConnection (and WANIPConnection) instance.
+// GenieACS won't expand "*" and the IP moves instances between CPEs — e.g. a
+// Huawei HG8145V5 reports its internet IP on
+// WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1 — so the exact paths
+// must be enumerated or the {ip} device lookup 404s for the whole device.
+func externalIPOr(ip string) []map[string]interface{} {
+	var ors []map[string]interface{}
+	for c := 1; c <= wanConnectionDeviceInstances; c++ {
+		for p := 1; p <= wanPPPConnectionInstances; p++ {
+			for _, conn := range []string{"WANPPPConnection", "WANIPConnection"} {
+				path := fmt.Sprintf(
+					"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.%d.%s.%d.ExternalIPAddress._value",
+					c, conn, p)
+				ors = append(ors, map[string]interface{}{path: ip})
+			}
+		}
+	}
+	return ors
+}
+
 // searchDeviceFilter builds an $or clause matching the term as a
 // substring of model, serial, MAC, PPPoE username, or _id. Pure function
 // for unit testability.
