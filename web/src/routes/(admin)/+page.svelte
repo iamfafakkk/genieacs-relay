@@ -34,9 +34,8 @@
 
 	const pageSize = 20;
 
-	// Devices inform every ~200s (see management server); allow a small
-	// grace window before calling one offline.
-	const ONLINE_WINDOW_MS = 15 * 60 * 1000;
+	// Online = informed within the last 5 minutes.
+	const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 
 	function isOnline(device: DeviceSummary): boolean {
 		if (!device.last_inform) return false;
@@ -205,6 +204,7 @@
 								<Table.Head>PPPoE User</Table.Head>
 								<Table.Head>Rx Power</Table.Head>
 								<Table.Head>IP</Table.Head>
+								<Table.Head>Status</Table.Head>
 								<Table.Head>Last Inform</Table.Head>
 							</Table.Row>						</Table.Header>
 						<Table.Body>
@@ -231,11 +231,16 @@
 												target="_blank"
 												rel="noopener noreferrer">{device.ip}</Badge
 											>
-										{:else if isOnline(device)}
+										{:else}
 											<span class="text-muted-foreground">—</span>
+										{/if}
+									</Table.Cell>
+									<Table.Cell>
+										{#if isOnline(device)}
+											<Badge variant="outline" class="border-success/50 text-success">Online</Badge>
 										{:else}
 											<Badge variant="outline" class="border-destructive/50 text-destructive">
-												offline
+												Offline
 											</Badge>
 										{/if}
 									</Table.Cell>
