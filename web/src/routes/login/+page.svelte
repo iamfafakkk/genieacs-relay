@@ -28,7 +28,7 @@
 		event.preventDefault();
 		error = '';
 		if (!apiKey.trim()) {
-			error = 'API key wajib diisi.';
+			error = 'API key is required.';
 			return;
 		}
 
@@ -43,9 +43,9 @@
 			error =
 				e instanceof Error
 					? e.message === 'Missing X-API-Key header' || e.message === 'Invalid API key'
-						? 'API key tidak valid.'
+						? 'Invalid API key.'
 						: e.message
-					: 'Gagal memverifikasi API key.';
+					: 'Failed to verify the API key.';
 		} finally {
 			pending = false;
 		}
@@ -63,7 +63,7 @@
 				<NetworkIcon />
 			</div>
 			<Card.Title>GenieACS Relay</Card.Title>
-			<Card.Description>Masuk dengan API key untuk membuka admin panel.</Card.Description>
+			<Card.Description>Sign in with an API key to open the admin panel.</Card.Description>
 		</Card.Header>
 
 		<Card.Content>
@@ -84,7 +84,7 @@
 							<InputGroup.Addon align="inline-end">
 								<InputGroup.Button
 									size="icon-xs"
-									aria-label={showKey ? 'Sembunyikan API key' : 'Tampilkan API key'}
+									aria-label={showKey ? 'Hide API key' : 'Show API key'}
 									onclick={() => (showKey = !showKey)}
 								>
 									{#if showKey}
@@ -96,7 +96,7 @@
 							</InputGroup.Addon>
 						</InputGroup.Root>
 						<Field.FieldDescription>
-							Nilai <code class="text-foreground">AUTH_KEY</code> dari backend. Disimpan di cookie browser.
+							Backend <code class="text-foreground">AUTH_KEY</code> value. Stored in a browser cookie.
 						</Field.FieldDescription>
 						{#if error}
 							<Field.FieldError>{error}</Field.FieldError>
@@ -107,10 +107,10 @@
 				<Button type="submit" class="mt-6 w-full" disabled={pending}>
 					{#if pending}
 						<Spinner data-icon="inline-start" />
-						Memeriksa…
+						Checking…
 					{:else}
 						<LogInIcon data-icon="inline-start" />
-						Masuk
+						Sign in
 					{/if}
 				</Button>
 			</form>
@@ -119,10 +119,10 @@
 		<Card.Footer class="flex-col items-stretch">
 			<Alert>
 				<KeyRoundIcon />
-				<AlertTitle>Tanpa API key?</AlertTitle>
+				<AlertTitle>No API key?</AlertTitle>
 				<AlertDescription>
-					Isi <code>AUTH_KEY</code> di <code>.env</code> dan set <code>MIDDLEWARE_AUTH=true</code>, lalu
-					jalankan ulang <code>make dev</code>.
+					Set <code>AUTH_KEY</code> in <code>.env</code> and <code>MIDDLEWARE_AUTH=true</code>, then
+					restart <code>make dev</code>.
 				</AlertDescription>
 			</Alert>
 		</Card.Footer>

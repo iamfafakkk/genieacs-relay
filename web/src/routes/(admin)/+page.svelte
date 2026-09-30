@@ -44,7 +44,7 @@
 			hasMore = res.has_more;
 			error = '';
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Gagal memuat device.';
+			error = e instanceof Error ? e.message : 'Failed to load devices.';
 		} finally {
 			refreshing = false;
 		}
@@ -77,7 +77,7 @@
 		<div>
 			<h2 class="text-lg font-semibold">Dashboard</h2>
 			<p class="text-muted-foreground text-sm">
-				Ringkasan relay GenieACS · uptime {version?.uptime ?? '—'}
+				GenieACS relay overview · uptime {version?.uptime ?? '—'}
 			</p>
 		</div>
 		<Button variant="outline" size="sm" onclick={loadDevices} disabled={refreshing}>
@@ -93,7 +93,7 @@
 	{#if error}
 		<Alert variant="destructive">
 			<TriangleAlertIcon />
-			<AlertTitle>Gagal memuat data</AlertTitle>
+			<AlertTitle>Failed to load data</AlertTitle>
 			<AlertDescription>{error}</AlertDescription>
 		</Alert>
 	{/if}
@@ -115,7 +115,7 @@
 	<Card.Root>
 		<Card.Header>
 			<Card.Title>Devices</Card.Title>
-			<Card.Description>Halaman pertama dari koleksi device GenieACS.</Card.Description>
+			<Card.Description>First page of the GenieACS device collection.</Card.Description>
 		</Card.Header>
 		<Card.Content>
 			{#if refreshing && devices.length === 0}
@@ -130,9 +130,9 @@
 						<Empty.Media variant="icon">
 							<InboxIcon />
 						</Empty.Media>
-						<Empty.Title>Belum ada device</Empty.Title>
+						<Empty.Title>No devices yet</Empty.Title>
 						<Empty.Description>
-							GenieACS belum melaporkan device apa pun. Pastikan CPE terhubung ke ACS.
+							GenieACS has not reported any device. Make sure your CPE is connected to the ACS.
 						</Empty.Description>
 					</Empty.Header>
 				</Empty.Root>
