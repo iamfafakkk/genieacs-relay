@@ -491,3 +491,39 @@ func TestCollectPaths_EmptyInput(t *testing.T) {
 	assert.Empty(t, found)
 	assert.Nil(t, missing)
 }
+
+// --- FirstLeafString / FirstLeafStringExcept ---
+
+func TestFirstLeafString_PrefersInstance1(t *testing.T) {
+	node := map[string]interface{}{
+		"1": map[string]interface{}{"Leaf": map[string]interface{}{"_value": "one"}},
+		"2": map[string]interface{}{"Leaf": map[string]interface{}{"_value": "two"}},
+	}
+	assert.Equal(t, "one", FirstLeafString(node, "Leaf"))
+}
+
+func TestFirstLeafString_SkipsZeroIPPlaceholder(t *testing.T) {
+	// A disconnected connection reports 0.0.0.0 on instance 1; the
+	// connected one is on instance 2 (WANConnectionDevice.2).
+	node := map[string]interface{}{
+		"1": map[string]interface{}{
+			"WANPPPConnection": map[string]interface{}{
+				"1": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": "0.0.0.0"}},
+			},
+		},
+		"2": map[string]interface{}{
+			"WANPPPConnection": map[string]interface{}{
+				"1": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": "10.100.149.176"}},
+			},
+		},
+	}
+	assert.Equal(t, "10.100.149.176",
+		FirstLeafStringExcept(node, []string{"0.0.0.0"}, "ExternalIPAddress"))
+}
+
+func TestFirstLeafString_AllSkippedReturnsEmpty(t *testing.T) {
+	node := map[string]interface{}{
+		"1": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": "0.0.0.0"}},
+	}
+	assert.Equal(t, "", FirstLeafStringExcept(node, []string{"0.0.0.0"}, "ExternalIPAddress"))
+}

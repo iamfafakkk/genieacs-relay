@@ -32,6 +32,15 @@ const DefaultDevicesPageSize = 50
 // thousands of device documents in one call.
 const MaxDevicesPageSize = 200
 
+// GenieACS NBI matches parameter paths exactly — it does not expand the
+// TR-069 "*" wildcard — so a lookup that can live on any instance has to
+// enumerate the instance grid. These bounds cover the production fleet
+// (WANConnectionDevice 1..3, WANPPPConnection 1..8).
+const (
+	wanConnectionDeviceInstances = 3
+	wanPPPConnectionInstances    = 8
+)
+
 // DeviceSummary is the per-row shape returned by /devices and
 // /devices/search. We don't echo the full device tree here — that's
 // what /params/{ip} or /status/{ip} are for; this is a lightweight
@@ -46,6 +55,15 @@ type DeviceSummary struct {
 	Model        string `json:"model,omitempty"`
 	Serial       string `json:"serial,omitempty"`
 	MAC          string `json:"mac,omitempty"`
+
+	// PPPoEUsername — WAN PPPoE username, when the CPE terminates PPPoE
+	// itself in router mode.
+	PPPoEUsername string `json:"pppoe_username,omitempty"`
+
+	// RxPowerDbm — optical receive power in dBm, read from whichever
+	// vendor parameter tree the CPE exposes. Omitted when the device
+	// doesn't report optics (0 is the "not reported" sentinel).
+	RxPowerDbm float64 `json:"rx_power_dbm,omitempty"`
 }
 
 // DevicesListResponse is the shape returned by GET /devices.
@@ -85,6 +103,7 @@ var (
 //	@Param			model			query		string	false	"Filter by model substring (e.g. F670L)"
 //	@Param			online			query		bool	false	"Only include devices that are currently online"
 //	@Param			pppoe_username	query		string	false	"Filter by PPPoE username substring"
+//	@Param			search			query		string	false	"Free-text search across model, serial, MAC, PPPoE username, and device id"
 //	@Success		200				{object}	Response{data=DevicesListResponse}
 //	@Failure		400				{object}	Response
 //	@Failure		401				{object}	Response
@@ -158,9 +177,16 @@ func buildDevicesListFilter(r *http.Request) map[string]interface{} {
 		}
 	}
 	if v := r.URL.Query().Get("pppoe_username"); v != "" {
-		filter["InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username._value"] = map[string]interface{}{
+		// Exact instance grid — GenieACS won't expand "*".
+		filter["$or"] = pppoeUsernameOr(map[string]interface{}{
 			"$regex": regexp.QuoteMeta(v),
-		}
+		})
+	}
+	// Free-text search: OR across model, serial, MAC, PPPoE username, and
+	// _id (which carries the serial as its last segment). Used by the
+	// admin panel search box — see searchDeviceFilter.
+	if v := r.URL.Query().Get("search"); v != "" {
+		filter = mergeOrFilter(filter, searchDeviceFilter(v))
 	}
 	if r.URL.Query().Get("online") == BoolStrTrue && staleThreshold > 0 {
 		// "Online" = last inform within 3x the stale threshold.
@@ -174,19 +200,77 @@ func buildDevicesListFilter(r *http.Request) map[string]interface{} {
 	return filter
 }
 
+// pppoeUsernameOr returns $or clauses matching the PPPoE Username across
+// every WANConnectionDevice / WANPPPConnection instance. GenieACS won't
+// expand "*", and the username moves instances between CPEs (observed on
+// production: WANConnectionDevice 1..3, WANPPPConnection 1..8), so the
+// exact paths must be enumerated.
+func pppoeUsernameOr(value interface{}) []map[string]interface{} {
+	var ors []map[string]interface{}
+	for c := 1; c <= wanConnectionDeviceInstances; c++ {
+		for p := 1; p <= wanPPPConnectionInstances; p++ {
+			path := fmt.Sprintf(
+				"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.%d.WANPPPConnection.%d.Username._value",
+				c, p)
+			ors = append(ors, map[string]interface{}{path: value})
+		}
+	}
+	return ors
+}
+
+// searchDeviceFilter builds an $or clause matching the term as a
+// substring of model, serial, MAC, PPPoE username, or _id. Pure function
+// for unit testability.
+func searchDeviceFilter(term string) map[string]interface{} {
+	re := map[string]interface{}{"$regex": regexp.QuoteMeta(term)}
+	or := []map[string]interface{}{
+		{"InternetGatewayDevice.DeviceInfo.ModelName._value": re},
+		{"InternetGatewayDevice.DeviceInfo.SerialNumber._value": re},
+		{"InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress._value": re},
+	}
+	or = append(or, pppoeUsernameOr(re)...)
+	or = append(or, map[string]interface{}{"_id": re})
+	return map[string]interface{}{"$or": or}
+}
+
+// mergeOrFilter combines a base filter with an $or clause into an $and
+// so both conditions apply. When either side is empty the other is
+// returned unchanged, keeping the common no-filter case a plain object.
+func mergeOrFilter(base, or map[string]interface{}) map[string]interface{} {
+	if len(base) == 0 {
+		return or
+	}
+	return map[string]interface{}{"$and": []map[string]interface{}{base, or}}
+}
+
+// devicesProjection builds the GenieACS NBI projection for the device
+// list: identification + last_inform, the LAN MAC, the whole
+// InternetGatewayDevice.WANDevice subtree, and the non-WAN optical
+// trees. GenieACS returns every instance of a projected object
+// recursively (wildcards "*" are ignored), so the whole WAN hierarchy
+// — IP, PPPoE username, vendor optical RX power on any instance — comes
+// back without enumerating instance paths.
+func devicesProjection() string {
+	parts := []string{
+		"_id",
+		"_lastInform",
+		"InternetGatewayDevice.DeviceInfo.Manufacturer",
+		"InternetGatewayDevice.DeviceInfo.ModelName",
+		"InternetGatewayDevice.DeviceInfo.SerialNumber",
+		"InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress",
+		"InternetGatewayDevice.WANDevice",
+		"InternetGatewayDevice.ManagementServer.ConnectionRequestURL",
+	}
+	return strings.Join(append(parts, rxPowerAbsolutePaths...), ",")
+}
+
 // queryDevicesNBI executes the GenieACS NBI `/devices?query=...&limit=...&skip=...`
 // call and decodes the response into DeviceSummary structs. The
-// projection is hardcoded to the lightweight set of identification +
-// last_inform fields so we don't pull megabytes of device tree per
-// listing call.
+// projection is the lightweight set of identification + last_inform +
+// the fields surfaced in the admin device table (see devicesProjection).
 func queryDevicesNBI(ctx context.Context, filter map[string]interface{}, limit, skip int) ([]DeviceSummary, error) {
 	queryBytes, _ := json.Marshal(filter)
-	projection := "_id,_lastInform," +
-		"InternetGatewayDevice.DeviceInfo.Manufacturer," +
-		"InternetGatewayDevice.DeviceInfo.ModelName," +
-		"InternetGatewayDevice.DeviceInfo.SerialNumber," +
-		"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress," +
-		"InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress"
+	projection := devicesProjection()
 
 	urlQ := fmt.Sprintf("%s/devices/?query=%s&projection=%s&limit=%d&skip=%d",
 		geniesBaseURL,
@@ -253,13 +337,18 @@ func deviceSummaryFromTree(doc map[string]interface{}) DeviceSummary {
 		d.Serial = v
 	}
 	if v, ok := LookupString(doc,
-		"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress"); ok {
-		d.IP = v
-	}
-	if v, ok := LookupString(doc,
 		"InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress"); ok {
 		d.MAC = v
 	}
+	d.IP = wanIP(doc)
+	if d.IP == "" {
+		// Some CPEs leave WANConnection.ExternalIPAddress blank (or
+		// " ") while still reporting the management IP in the ACS
+		// connection-request URL. It is the same WAN address.
+		d.IP = connectionRequestIP(doc)
+	}
+	d.PPPoEUsername = wanString(doc, "Username")
+	d.RxPowerDbm = extractRxPower(doc)
 
 	// Fallback: extract model and serial from _id when TR-069 params
 	// are not yet discovered. _id format: "OUI-ProductClass-Serial".
@@ -276,6 +365,73 @@ func deviceSummaryFromTree(doc map[string]interface{}) DeviceSummary {
 	}
 
 	return d
+}
+
+// wanDeviceSubtree returns the projected InternetGatewayDevice.WANDevice
+// map, or nil when the device has no WAN subtree.
+func wanDeviceSubtree(doc map[string]interface{}) map[string]interface{} {
+	igd, ok := doc["InternetGatewayDevice"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	devices, _ := igd["WANDevice"].(map[string]interface{})
+	return devices
+}
+
+// wanIP returns the CPE's WAN external IP in the same priority order the
+// GenieACS virtual parameter uses: WANPPPConnection first, then
+// WANIPConnection. Many CPEs expose both (623 WANConnectionDevices on
+// the production fleet) and the IP connection is frequently the TR-069
+// management WAN, not the customer internet WAN — so PPP must win.
+// The 0.0.0.0 placeholder reported by Disconnected/Connecting links is
+// skipped so a connected instance can win instead.
+func wanIP(doc map[string]interface{}) string {
+	devices := wanDeviceSubtree(doc)
+	if devices == nil {
+		return ""
+	}
+	skip := []string{"0.0.0.0"}
+	for _, connType := range []string{"WANPPPConnection", "WANIPConnection"} {
+		for _, wd := range orderedChildren(devices) {
+			cds, _ := wd["WANConnectionDevice"].(map[string]interface{})
+			for _, cd := range orderedChildren(cds) {
+				conns, _ := cd[connType].(map[string]interface{})
+				if ip := FirstLeafStringExcept(conns, skip, "ExternalIPAddress"); ip != "" {
+					return ip
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// wanString returns the first non-empty value of the named leaf within
+// the projected WANDevice subtree (e.g. the PPPoE Username). Projection
+// includes the whole subtree, so no instance paths are needed.
+func wanString(doc map[string]interface{}, leaf string) string {
+	devices := wanDeviceSubtree(doc)
+	if devices == nil {
+		return ""
+	}
+	return FirstLeafString(devices, leaf)
+}
+
+// connectionRequestIP extracts the host from the ACS
+// ConnectionRequestURL (http://<ip>:<port>/<path>). Used as an IP
+// fallback for CPEs whose WAN ExternalIPAddress is blank but which
+// still report a reachable management address.
+var connectionRequestURLRe = regexp.MustCompile(`^https?://([^:/]+)`)
+
+func connectionRequestIP(doc map[string]interface{}) string {
+	u, ok := LookupString(doc, "InternetGatewayDevice.ManagementServer.ConnectionRequestURL")
+	if !ok {
+		return ""
+	}
+	m := connectionRequestURLRe.FindStringSubmatch(u)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
 }
 
 // --- M5: GET /devices/search ---
@@ -349,6 +505,6 @@ func buildDevicesSearchFilter(mac, serial, pppoe string) map[string]interface{} 
 		}
 	}
 	return map[string]interface{}{
-		"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username._value": pppoe,
+		"$or": pppoeUsernameOr(pppoe),
 	}
 }

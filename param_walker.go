@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,14 +90,22 @@ func LookupString(tree map[string]interface{}, path string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	return valueAsString(v)
+}
+
+// valueAsString coerces a GenieACS `_value` to its canonical string
+// form, producing an int representation for integral JSON numbers so
+// callers don't see "1234567.0" for an obviously-integer parameter like
+// UpTime. Returns ("", false) for unsupported types.
+func valueAsString(v interface{}) (string, bool) {
 	switch x := v.(type) {
 	case string:
-		return x, true
+		// Some CPEs report a whitespace-only placeholder (e.g. a
+		// disconnected WANConnection.ExternalIPAddress comes back as
+		// " "). Trim so it is treated as empty and doesn't shadow a
+		// real value further down the tree.
+		return strings.TrimSpace(x), true
 	case float64:
-		// JSON Unmarshal decodes all numbers as float64; produce an
-		// int representation when the value is integral so callers
-		// don't see "1234567.0" for an obviously-integer parameter
-		// like UpTime.
 		if x == float64(int64(x)) {
 			return strconv.FormatInt(int64(x), 10), true
 		}
@@ -105,6 +114,110 @@ func LookupString(tree map[string]interface{}, path string) (string, bool) {
 		return strconv.FormatBool(x), true
 	}
 	return "", false
+}
+
+// FirstLeafString walks a nested GenieACS subtree and returns the first
+// non-empty string `_value` found at a leaf whose key matches one of
+// names. Children are visited in ascending numeric-instance order so
+// instance 1 wins over 2 when several match. Returns "" when none match.
+//
+// Used for WAN lookups where the exact instance path varies per CPE
+// (ExternalIPAddress / Username live on WANConnectionDevice.2 or
+// PPPConnection.3 on some models), so enumerating paths is hopeless.
+func FirstLeafString(node map[string]interface{}, names ...string) string {
+	return firstLeafString(node, nil, names)
+}
+
+// FirstLeafStringExcept is FirstLeafString but ignores leaves whose
+// value equals one of skip. Used to drop the "0.0.0.0" placeholder a
+// disconnected WAN connection reports, so a later connected instance
+// can win instead of masking it.
+func FirstLeafStringExcept(node map[string]interface{}, skip []string, names ...string) string {
+	return firstLeafString(node, skip, names)
+}
+
+func firstLeafString(node map[string]interface{}, skip []string, names []string) string {
+	for _, child := range orderedChildren(node) {
+		for _, name := range names {
+			if leaf, ok := child[name].(map[string]interface{}); ok {
+				if s, ok := valueAsString(leaf["_value"]); ok && s != "" && !slices.Contains(skip, s) {
+					return s
+				}
+			}
+		}
+		if s := firstLeafString(child, skip, names); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// FirstLeafFloat is the float64 variant of FirstLeafString. It accepts
+// native numbers and numeric strings (vendor trees ship both).
+func FirstLeafFloat(node map[string]interface{}, names ...string) (float64, bool) {
+	for _, child := range orderedChildren(node) {
+		for _, name := range names {
+			if leaf, ok := child[name].(map[string]interface{}); ok {
+				switch v := leaf["_value"].(type) {
+				case float64:
+					return v, true
+				case int:
+					return float64(v), true
+				case int64:
+					return float64(v), true
+				case string:
+					if f, err := strconv.ParseFloat(v, 64); err == nil {
+						return f, true
+					}
+				}
+			}
+		}
+		if f, ok := FirstLeafFloat(child, names...); ok {
+			return f, true
+		}
+	}
+	return 0, false
+}
+
+// orderedChildren returns the map-valued children of a nested object,
+// with numeric instance keys first (ascending) and any other object
+// children after. Metadata keys (starting with "_") are skipped.
+// Ordering makes instance 1 win over 2 when several leaves match.
+func orderedChildren(node map[string]interface{}) []map[string]interface{} {
+	if len(node) == 0 {
+		return nil
+	}
+	type entry struct {
+		order int // -1 for non-numeric keys
+		key   string
+		value map[string]interface{}
+	}
+	entries := make([]entry, 0, len(node))
+	for key, value := range node {
+		if strings.HasPrefix(key, "_") {
+			continue
+		}
+		child, ok := value.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		order := -1
+		if n, err := strconv.Atoi(key); err == nil {
+			order = n
+		}
+		entries = append(entries, entry{order, key, child})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].order != entries[j].order {
+			return entries[i].order < entries[j].order
+		}
+		return entries[i].key < entries[j].key
+	})
+	children := make([]map[string]interface{}, 0, len(entries))
+	for _, e := range entries {
+		children = append(children, e.value)
+	}
+	return children
 }
 
 // LookupInt walks a dotted parameter path and returns the leaf as an
@@ -126,6 +239,33 @@ func LookupInt(tree map[string]interface{}, path string) (int, bool) {
 			return 0, false
 		}
 		return n, true
+	}
+	return 0, false
+}
+
+// LookupFloat walks a dotted parameter path and returns the leaf as a
+// float64. JSON numbers (the common case) and numeric strings are
+// accepted — some vendor trees (e.g. ZTE X_ZTE-COM_WANPONInterfaceConfig)
+// ship everything as xsd:string. Returns (0, false) when missing or
+// non-numeric; callers treat 0 as "not reported".
+func LookupFloat(tree map[string]interface{}, path string) (float64, bool) {
+	v, ok := LookupValue(tree, path)
+	if !ok {
+		return 0, false
+	}
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case string:
+		f, err := strconv.ParseFloat(x, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
 	}
 	return 0, false
 }
@@ -174,8 +314,7 @@ func LookupTime(tree map[string]interface{}, path string) (time.Time, bool) {
 	return t, true
 }
 
-// EnumerateInstances finds all numeric instance keys under a parent
-// dotted path and returns them sorted ascending.
+// EnumerateInstances finds all numeric instance keys under a parent// dotted path and returns them sorted ascending.
 //
 // TR-069 multi-instance objects (e.g. WANConnectionDevice.{1,2,3},
 // WLANConfiguration.{1,5,8}) are stored in GenieACS as nested maps

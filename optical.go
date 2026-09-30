@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -353,6 +354,57 @@ func extractStandardTR181(deviceData map[string]interface{}, stats *OpticalStats
 	stats.TemperatureC = readFloat(statsTree, "Temperature")
 	stats.VoltageV = readFloat(statsTree, "Voltage")
 	return true
+}
+
+// extractRxPower reads optical receive power (dBm) from whichever
+// vendor parameter tree the device exposes. Scans every WANDevice
+// instance (optics often live on instance 2, not 1) and every known
+// vendor tree, mirroring the detection order in getOpticalStats.
+//
+// Returns 0 when nothing is found — 0 is the "not reported" sentinel
+// (json omitempty), same convention as OpticalStats.
+//
+// rawRxToDBm applies the two on-wire encodings: most ONTs report dBm
+// directly (negative), while Huawei X_GponInterafceConfig and ZTE
+// X_CMCC_GponInterfaceConfig report linear µW (positive, e.g. "-16.25
+// dBm" arrives as "23.7"). Without the conversion those devices showed
+// a bogus positive number and looked "missing" in the UI.
+func extractRxPower(doc map[string]interface{}) float64 {
+	if wan, ok := doc["InternetGatewayDevice"].(map[string]interface{}); ok {
+		if devices, ok := wan["WANDevice"].(map[string]interface{}); ok {
+			// Vendor trees name the leaf RXPower (ZTE) or RxPower; scan
+			// the whole WAN subtree so instance placement doesn't matter.
+			if raw, ok := FirstLeafFloat(devices, "RXPower", "RxPower"); ok && raw != 0 {
+				return rawRxToDBm(raw)
+			}
+		}
+	}
+	for _, path := range rxPowerAbsolutePaths {
+		if v, ok := LookupFloat(doc, path); ok && v != 0 {
+			return rawRxToDBm(v)
+		}
+	}
+	return 0
+}
+
+// rxPowerAbsolutePaths covers the non-WAN optical trees (Realtek EPON,
+// Huawei HW_DEBUG, standard TR-181) that some CPEs expose outside the
+// WANDevice hierarchy.
+var rxPowerAbsolutePaths = []string{
+	"InternetGatewayDevice.X_HW_DEBUG.AdminTR069.RxPower",
+	"InternetGatewayDevice.X_Realtek_EponInterfaceConfig.Stats.RxPower",
+	"Device.Optical.Interface.1.Stats.RxPower",
+}
+
+// rawRxToDBm normalizes a raw optical RX power reading to dBm. Negative
+// values are already in dBm and pass through; positive values are
+// linear power in units of 0.01 µW (matching the GenieACS virtual
+// parameter convention), converted with 10*log10(raw/10000).
+func rawRxToDBm(raw float64) float64 {
+	if raw < 0 {
+		return math.Round(raw*100) / 100
+	}
+	return math.Round(10*math.Log10(raw/10000)*10) / 10
 }
 
 // navigateNested walks a chain of map[string]interface{} keys and

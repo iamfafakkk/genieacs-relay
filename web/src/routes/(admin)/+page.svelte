@@ -7,6 +7,7 @@
 	import * as Empty from '$lib/components/ui/empty';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -15,18 +16,33 @@
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import PackageIcon from '@lucide/svelte/icons/package';
 	import InboxIcon from '@lucide/svelte/icons/inbox';
+	import SearchIcon from '@lucide/svelte/icons/search';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 
 	let refreshing = $state(false);
 	let devices = $state<DeviceSummary[]>([]);
+	let page = $state(1);
 	let count = $state(0);
 	let hasMore = $state(false);
+	let search = $state('');
 	let version = $state<VersionResponse | null>(null);
 	let healthy = $state<boolean | null>(null);
 	let error = $state('');
 
 	const pageSize = 20;
+
+	// Devices inform every ~200s (see management server); allow a small
+	// grace window before calling one offline.
+	const ONLINE_WINDOW_MS = 15 * 60 * 1000;
+
+	function isOnline(device: DeviceSummary): boolean {
+		if (!device.last_inform) return false;
+		const t = new Date(device.last_inform).getTime();
+		return !Number.isNaN(t) && Date.now() - t < ONLINE_WINDOW_MS;
+	}
 
 	function formatTime(iso?: string): string {
 		if (!iso) return '—';
@@ -35,10 +51,14 @@
 		return date.toLocaleString();
 	}
 
+	function formatRxPower(dbm?: number): string {
+		return typeof dbm === 'number' && dbm !== 0 ? `${dbm.toFixed(2)} dBm` : '—';
+	}
+
 	async function loadDevices() {
 		refreshing = true;
 		try {
-			const res = await listDevices(1, pageSize);
+			const res = await listDevices(page, pageSize, search);
 			devices = res.devices;
 			count = res.count;
 			hasMore = res.has_more;
@@ -48,6 +68,19 @@
 		} finally {
 			refreshing = false;
 		}
+	}
+
+	function goToPage(next: number) {
+		page = next;
+		loadDevices();
+	}
+
+	// Server-side search across the whole collection. Any term matching
+	// model, MAC, serial, or PPPoE username resets to page 1.
+	function applySearch(term: string) {
+		search = term;
+		page = 1;
+		loadDevices();
 	}
 
 	$effect(() => {
@@ -60,7 +93,7 @@
 			.catch(() => (version = null));
 	});
 
-	const online = $derived(devices.filter((d) => d.ip).length);
+	const online = $derived(devices.filter(isOnline).length);
 
 	const stats = $derived([
 		{ label: 'Total Devices', value: count + (hasMore ? '+' : ''), icon: ServerIcon },
@@ -114,8 +147,29 @@
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>Devices</Card.Title>
-			<Card.Description>First page of the GenieACS device collection.</Card.Description>
+			<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+				<div>
+					<Card.Title>Devices</Card.Title>
+					<Card.Description>GenieACS device collection, {pageSize} per page.</Card.Description>
+				</div>
+				<form
+					class="relative w-full sm:w-72"
+					onsubmit={(e) => {
+						e.preventDefault();
+						applySearch(search.trim());
+					}}
+				>
+					<SearchIcon
+						class="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
+					/>
+					<Input
+						class="pl-9"
+						placeholder="Search model, MAC, serial, PPPoE user…"
+						bind:value={search}
+						oninput={(e) => applySearch(e.currentTarget.value.trim())}
+					/>
+				</form>
+			</div>
 		</Card.Header>
 		<Card.Content>
 			{#if refreshing && devices.length === 0}
@@ -130,9 +184,13 @@
 						<Empty.Media variant="icon">
 							<InboxIcon />
 						</Empty.Media>
-						<Empty.Title>No devices yet</Empty.Title>
+						<Empty.Title>{search ? 'No matching devices' : 'No devices yet'}</Empty.Title>
 						<Empty.Description>
-							GenieACS has not reported any device. Make sure your CPE is connected to the ACS.
+							{#if search}
+								No device matches “{search}”. Try a different model, MAC, serial, or PPPoE user.
+							{:else}
+								GenieACS has not reported any device. Make sure your CPE is connected to the ACS.
+							{/if}
 						</Empty.Description>
 					</Empty.Header>
 				</Empty.Root>
@@ -144,21 +202,34 @@
 								<Table.Head>Device ID</Table.Head>
 								<Table.Head>Model</Table.Head>
 								<Table.Head>Serial</Table.Head>
+								<Table.Head>PPPoE User</Table.Head>
+								<Table.Head>Rx Power</Table.Head>
 								<Table.Head>IP</Table.Head>
 								<Table.Head>Last Inform</Table.Head>
-							</Table.Row>
-						</Table.Header>
+							</Table.Row>						</Table.Header>
 						<Table.Body>
 							{#each devices as device (device.device_id)}
 								<Table.Row>
 									<Table.Cell class="max-w-64 truncate font-mono text-xs">{device.device_id}</Table.Cell>
 									<Table.Cell>{device.model ?? '—'}</Table.Cell>
 									<Table.Cell class="font-mono text-xs">{device.serial ?? '—'}</Table.Cell>
+									<Table.Cell class="font-mono text-xs">{device.pppoe_username ?? '—'}</Table.Cell>
+									<Table.Cell class="font-mono text-xs">{formatRxPower(device.rx_power_dbm)}</Table.Cell>
 									<Table.Cell>
 										{#if device.ip}
-											<Badge variant="secondary">{device.ip}</Badge>
+											<Badge
+												variant="outline"
+												class="border-success/50 text-success"
+												href={`http://${device.ip}`}
+												target="_blank"
+												rel="noopener noreferrer">{device.ip}</Badge
+											>
+										{:else if isOnline(device)}
+											<span class="text-muted-foreground">—</span>
 										{:else}
-											<Badge variant="outline">offline</Badge>
+											<Badge variant="outline" class="border-destructive/50 text-destructive">
+												offline
+											</Badge>
 										{/if}
 									</Table.Cell>
 									<Table.Cell class="text-muted-foreground">{formatTime(device.last_inform)}</Table.Cell>
@@ -169,5 +240,31 @@
 				</div>
 			{/if}
 		</Card.Content>
+		<Card.Footer class="flex items-center justify-between gap-2">
+			<p class="text-muted-foreground text-sm">
+				Page {page} · {count}
+				{hasMore ? '+' : ''} devices{search ? ` matching “${search}”` : ''}
+			</p>
+			<div class="flex items-center gap-2">
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={page <= 1 || refreshing}
+					onclick={() => goToPage(page - 1)}
+				>
+					<ChevronLeftIcon data-icon="inline-start" />
+					Previous
+				</Button>
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={!hasMore || refreshing}
+					onclick={() => goToPage(page + 1)}
+				>
+					Next
+					<ChevronRightIcon data-icon="inline-end" />
+				</Button>
+			</div>
+		</Card.Footer>
 	</Card.Root>
 </div>

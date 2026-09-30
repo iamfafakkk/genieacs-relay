@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,8 +35,38 @@ func TestBuildDevicesListFilter_Model(t *testing.T) {
 func TestBuildDevicesListFilter_PPPoEUsername(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/devices?pppoe_username=cust-001", nil)
 	filter := buildDevicesListFilter(r)
-	require.Contains(t, filter,
+	or, ok := filter["$or"].([]map[string]interface{})
+	require.True(t, ok, "pppoe_username must produce a top-level $or")
+	assert.Contains(t, or[0],
 		"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username._value")
+}
+
+func TestBuildDevicesListFilter_Search(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/devices?search=F670L", nil)
+	filter := buildDevicesListFilter(r)
+	or, ok := filter["$or"].([]map[string]interface{})
+	require.True(t, ok, "search must produce a top-level $or")
+	// model + serial + MAC + PPPoE instance grid + _id
+	require.Len(t, or, 3+wanConnectionDeviceInstances*wanPPPConnectionInstances+1)
+	assert.Equal(t, map[string]interface{}{"$regex": "F670L"}, or[0]["InternetGatewayDevice.DeviceInfo.ModelName._value"])
+}
+
+func TestBuildDevicesListFilter_SearchWithOtherFilter(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/devices?model=F670L&search=cust", nil)
+	filter := buildDevicesListFilter(r)
+	and, ok := filter["$and"].([]map[string]interface{})
+	require.True(t, ok, "search + model must be combined with $and")
+	require.Len(t, and, 2)
+	assert.Contains(t, and[0], "InternetGatewayDevice.DeviceInfo.ModelName._value")
+	assert.Contains(t, and[1], "$or")
+}
+
+func TestBuildDevicesListFilter_SearchQuotesRegex(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/devices?search=a.b", nil)
+	filter := buildDevicesListFilter(r)
+	or := filter["$or"].([]map[string]interface{})
+	clause := or[0]["InternetGatewayDevice.DeviceInfo.ModelName._value"].(map[string]interface{})
+	assert.Equal(t, `a\.b`, clause["$regex"])
 }
 
 func TestBuildDevicesListFilter_OnlineWithStaleThreshold(t *testing.T) {
@@ -140,8 +171,23 @@ func TestBuildDevicesSearchFilter_Serial(t *testing.T) {
 
 func TestBuildDevicesSearchFilter_PPPoE(t *testing.T) {
 	filter := buildDevicesSearchFilter("", "", "cust-001")
-	assert.Equal(t, "cust-001",
-		filter["InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username._value"])
+	// GenieACS matches parameter paths exactly (no wildcard), and the
+	// PPPoE Username instance varies per CPE (WANConnectionDevice up to
+	// 3, WANPPPConnection up to 8), so the filter ORs over the grid.
+	orClauses, ok := filter["$or"].([]map[string]interface{})
+	require.True(t, ok, "$or clause must be present")
+	require.Len(t, orClauses, wanConnectionDeviceInstances*wanPPPConnectionInstances)
+	assert.Contains(t, orClauses[0],
+		"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username._value")
+	last := orClauses[len(orClauses)-1]
+	assert.Contains(t, last, fmt.Sprintf(
+		"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.%d.WANPPPConnection.%d.Username._value",
+		wanConnectionDeviceInstances, wanPPPConnectionInstances))
+	for _, c := range orClauses {
+		for _, v := range c {
+			assert.Equal(t, "cust-001", v) // exact match, search endpoint
+		}
+	}
 }
 
 func TestBuildDevicesSearchFilter_Precedence(t *testing.T) {
@@ -195,6 +241,128 @@ func TestDeviceSummaryFromTree_Full(t *testing.T) {
 	assert.Equal(t, "SN-12345", d.Serial)
 	assert.Equal(t, "203.0.113.45", d.IP)
 	assert.Equal(t, "AA:BB:CC:DD:EE:FF", d.MAC)
+}
+
+// TestWanIP_PrefersPPPOverIP covers the production case where a single
+// WANConnectionDevice exposes both a WANPPPConnection (customer internet
+// WAN) and a WANIPConnection (TR-069 management WAN). The PPP one must
+// win even though "WANIPConnection" sorts first alphabetically.
+func TestWanIP_PrefersPPPOverIP(t *testing.T) {
+	doc := map[string]interface{}{
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANIPConnection": map[string]interface{}{
+								"1": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": "10.16.2.48"}},
+							},
+							"WANPPPConnection": map[string]interface{}{
+								"1": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": "10.100.149.64"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	assert.Equal(t, "10.100.149.64", wanIP(doc))
+}
+
+// TestWanIP_WhitespacePlaceholder covers CPEs that report a
+// whitespace-only ExternalIPAddress (seen on ZTE F670) instead of the
+// 0.0.0.0 placeholder. A blank value must not be treated as a real IP.
+func TestWanIP_WhitespacePlaceholder(t *testing.T) {
+	doc := map[string]interface{}{
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANPPPConnection": map[string]interface{}{
+								"2": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": " "}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	assert.Equal(t, "", wanIP(doc))
+}
+
+// TestWanIP_FallsBackToIPConnection covers devices with no PPPoE (e.g.
+// DHCP/static WAN) where the only address is on a WANIPConnection.
+func TestWanIP_FallsBackToIPConnection(t *testing.T) {
+	doc := map[string]interface{}{
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANIPConnection": map[string]interface{}{
+								"1": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": "203.0.113.9"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	assert.Equal(t, "203.0.113.9", wanIP(doc))
+}
+
+// TestDeviceSummaryFromTree_ConnectionRequestIPFallback covers CPEs
+// whose WAN ExternalIPAddress is blank but that still report a
+// management address via ManagementServer.ConnectionRequestURL.
+func TestDeviceSummaryFromTree_ConnectionRequestIPFallback(t *testing.T) {
+	doc := map[string]interface{}{
+		"_id": "device-cru",
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANPPPConnection": map[string]interface{}{
+								"2": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": " "}},
+							},
+						},
+					},
+				},
+			},
+			"ManagementServer": map[string]interface{}{
+				"ConnectionRequestURL": map[string]interface{}{
+					"_value": "http://10.100.185.223:58000/8b519e96d6658b23",
+				},
+			},
+		},
+	}
+	assert.Equal(t, "10.100.185.223", deviceSummaryFromTree(doc).IP)
+}
+
+// TestDeviceSummaryFromTree_ConnectionRequestIPNotUsedWhenWANPresent
+// ensures the WAN ExternalIPAddress still wins when it exists.
+func TestDeviceSummaryFromTree_ConnectionRequestIPNotUsedWhenWANPresent(t *testing.T) {
+	doc := map[string]interface{}{
+		"_id": "device-both",
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANPPPConnection": map[string]interface{}{
+								"1": map[string]interface{}{"ExternalIPAddress": map[string]interface{}{"_value": "203.0.113.45"}},
+							},
+						},
+					},
+				},
+			},
+			"ManagementServer": map[string]interface{}{
+				"ConnectionRequestURL": map[string]interface{}{"_value": "http://10.16.2.48:58000/x"},
+			},
+		},
+	}
+	assert.Equal(t, "203.0.113.45", deviceSummaryFromTree(doc).IP)
 }
 
 func TestDeviceSummaryFromTree_Empty(t *testing.T) {
@@ -280,6 +448,47 @@ func TestListDevicesHandler_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), "device-001")
 	assert.Contains(t, rr.Body.String(), "device-002")
+}
+
+func TestListDevicesHandler_PPPoEAndRxPower(t *testing.T) {
+	devices := []map[string]interface{}{
+		{
+			"_id":         "device-001",
+			"_lastInform": "2026-04-14T11:00:00Z",
+			"InternetGatewayDevice": map[string]interface{}{
+				"WANDevice": map[string]interface{}{
+					"1": map[string]interface{}{
+						"X_ZTE-COM_WANPONInterfaceConfig": map[string]interface{}{
+							// ZTE ships optics as xsd:string.
+							"RXPower": map[string]interface{}{"_value": "-25.08"},
+						},
+						"WANConnectionDevice": map[string]interface{}{
+							"2": map[string]interface{}{
+								"WANPPPConnection": map[string]interface{}{
+									"3": map[string]interface{}{
+										"ExternalIPAddress": map[string]interface{}{"_value": "10.100.149.67"},
+										"Username":          map[string]interface{}{"_value": "cust-001@isp"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	_, router := setupTestServer(t, devicesMockHandler(devices, http.StatusOK))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/genieacs/devices", nil)
+	req.Header.Set("X-API-Key", mockAPIKey)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	// Non-1.1.1 instances must still resolve (regression: instance pinning).
+	assert.Contains(t, rr.Body.String(), "cust-001@isp")
+	assert.Contains(t, rr.Body.String(), "10.100.149.67")
+	assert.Contains(t, rr.Body.String(), "-25.08")
 }
 
 func TestListDevicesHandler_BadPage(t *testing.T) {

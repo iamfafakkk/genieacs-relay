@@ -285,15 +285,15 @@ func TestClassifyOpticalHealth(t *testing.T) {
 		rxPowerDBm float64
 		want       string
 	}{
-		{"good_strong_signal", -10.0, "good"},     // -24 < -10 < -8
-		{"good_normal_pon", -20.0, "good"},        // -24 < -20 < -8
-		{"good_lower_normal", -23.5, "good"},      // -24 < -23.5 < -8
-		{"warning_attenuated", -25.0, "warning"},  // -27 < -25 <= -24
-		{"warning_marginal_top", -24.1, "warning"}, // -27 < -24.1 <= -24
-		{"critical_low_signal", -28.0, "critical"}, // -30 < -28 <= -27
-		{"critical_marginal_top", -27.0, "critical"}, // -30 < -27 <= -27
-		{"no_signal_dark_fiber", -35.0, "no_signal"}, // -35 <= -30
-		{"no_signal_threshold", -30.0, "no_signal"},  // -30 <= -30
+		{"good_strong_signal", -10.0, "good"},              // -24 < -10 < -8
+		{"good_normal_pon", -20.0, "good"},                 // -24 < -20 < -8
+		{"good_lower_normal", -23.5, "good"},               // -24 < -23.5 < -8
+		{"warning_attenuated", -25.0, "warning"},           // -27 < -25 <= -24
+		{"warning_marginal_top", -24.1, "warning"},         // -27 < -24.1 <= -24
+		{"critical_low_signal", -28.0, "critical"},         // -30 < -28 <= -27
+		{"critical_marginal_top", -27.0, "critical"},       // -30 < -27 <= -27
+		{"no_signal_dark_fiber", -35.0, "no_signal"},       // -35 <= -30
+		{"no_signal_threshold", -30.0, "no_signal"},        // -30 <= -30
 		{"warning_overload_close_to_olt", -7.5, "warning"}, // -7.5 >= -8
 		{"unknown_zero_value_unset_field", 0.0, "unknown"},
 	}
@@ -656,5 +656,46 @@ func TestOpticalStatsJSONShape(t *testing.T) {
 	s := string(raw)
 	for _, key := range []string{"rx_power_dbm", "tx_power_dbm", "health", "source"} {
 		assert.Contains(t, s, key)
+	}
+}
+
+// --- extractRxPower / rawRxToDBm ---
+
+// TestExtractRxPower covers the vendor trees, WANDevice instance scan,
+// and the raw→dBm conversion for both encodings observed in production.
+func TestExtractRxPower(t *testing.T) {
+	// helper: build {"...WANDevice": {"N": {"<tree>": {"RXPower": {"_value": v}}}}}
+	wan := func(instance string, tree string, value interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"InternetGatewayDevice": map[string]interface{}{
+				"WANDevice": map[string]interface{}{
+					instance: map[string]interface{}{tree: map[string]interface{}{
+						"RXPower": map[string]interface{}{"_value": value},
+					}},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name string
+		doc  map[string]interface{}
+		want float64
+	}{
+		{"zte direct dBm", wan("1", "X_ZTE-COM_WANPONInterfaceConfig", "-16.25"), -16.25},
+		{"huawei instance 2", wan("2", "X_GponInterafceConfig", "-21"), -21},
+		{"linear string → dBm", wan("1", "X_GponInterafceConfig", "23.7"), -26.3},
+		{"linear number → dBm", wan("1", "X_CMCC_GponInterfaceConfig", 30), -25.2},
+		{"ct-com gpon", wan("1", "X_CT-COM_GponInterfaceConfig", "-22.5"), -22.5},
+		{"missing", map[string]interface{}{}, 0},
+		{"zero is not reported", wan("1", "X_ZTE-COM_WANPONInterfaceConfig", "0"), 0},
+		{"non-wan tr181", map[string]interface{}{"Device": map[string]interface{}{
+			"Optical": map[string]interface{}{"Interface": map[string]interface{}{"1": map[string]interface{}{
+				"Stats": map[string]interface{}{"RxPower": map[string]interface{}{"_value": -19.4}}}}}}}, -19.4},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.InDelta(t, tc.want, extractRxPower(tc.doc), 0.05)
+		})
 	}
 }
