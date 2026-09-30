@@ -24,8 +24,6 @@
 
 	const AUTH_MODES = ['Open', 'WPA', 'WPA2', 'WPA/WPA2'];
 	const ENCRYPTIONS = ['AES', 'TKIP', 'TKIP+AES'];
-	/** Sentinel: leave the radio setting untouched on save. */
-	const UNCHANGED = 'unchanged';
 
 	const is5GHz = $derived(wlan.band.toLowerCase().includes('5'));
 	const channels = $derived(
@@ -34,6 +32,16 @@
 			: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13']
 	);
 	const bandwidths = $derived(is5GHz ? ['20MHz', '40MHz', '80MHz'] : ['20MHz', '40MHz']);
+	// Include the CPE's current value even if it is outside our standard set,
+	// so the Select can display it instead of going blank.
+	const channelChoices = $derived.by(() => {
+		const cur = wlan.channel;
+		return cur && cur !== 'Auto' && !channels.includes(cur) ? [...channels, cur] : channels;
+	});
+	const bandwidthChoices = $derived.by(() => {
+		const cur = wlan.bandwidth;
+		return cur && cur !== 'Auto' && !bandwidths.includes(cur) ? [...bandwidths, cur] : bandwidths;
+	});
 
 	// Drafts seeded from props; kept in sync by the $effect below.
 	// svelte-ignore state_referenced_locally
@@ -46,8 +54,14 @@
 	let hidden = $state(wlan.hidden);
 	let hiddenBusy = $state(false);
 	let password = $state('');
-	let channel = $state(UNCHANGED);
-	let bandwidth = $state(UNCHANGED);
+	// svelte-ignore state_referenced_locally
+	let channelSaved = $state(wlan.channel || 'Auto');
+	// svelte-ignore state_referenced_locally
+	let bandwidthSaved = $state(wlan.bandwidth || 'Auto');
+	// svelte-ignore state_referenced_locally
+	let channel = $state(wlan.channel || 'Auto');
+	// svelte-ignore state_referenced_locally
+	let bandwidth = $state(wlan.bandwidth || 'Auto');
 	let busy = $state(false);
 
 	// Re-sync drafts when the parent replaces the config (e.g. page refresh).
@@ -58,6 +72,10 @@
 		authMode = wlan.auth_mode || 'WPA2';
 		encryption = wlan.encryption || 'AES';
 		hidden = wlan.hidden;
+		channelSaved = wlan.channel || 'Auto';
+		bandwidthSaved = wlan.bandwidth || 'Auto';
+		channel = channelSaved;
+		bandwidth = bandwidthSaved;
 	});
 
 	function errMessage(e: unknown): string {
@@ -92,16 +110,16 @@
 			await updateWLAN(ip, wlan.wlan, body);
 
 			const radio: { channel?: string; bandwidth?: string } = {};
-			if (channel !== UNCHANGED) radio.channel = channel;
-			if (bandwidth !== UNCHANGED) radio.bandwidth = bandwidth;
+			if (channel !== channelSaved) radio.channel = channel;
+			if (bandwidth !== bandwidthSaved) radio.bandwidth = bandwidth;
 			if (Object.keys(radio).length > 0) await updateWLANRadio(ip, wlan.wlan, radio);
 
 			toast.success(
 				`WLAN ${wlan.wlan} settings submitted — pushed now if the CPE responds, else on its next inform (~30s).`
 			);
 			password = '';
-			channel = UNCHANGED;
-			bandwidth = UNCHANGED;
+			channelSaved = channel;
+			bandwidthSaved = bandwidth;
 		} catch (e) {
 			toast.error(`WLAN ${wlan.wlan} update failed: ${errMessage(e)}`);
 		} finally {
@@ -194,12 +212,11 @@
 					<Field.FieldLabel for={`wlan-${wlan.wlan}-chan`}>Channel</Field.FieldLabel>
 					<Select.Root type="single" bind:value={channel}>
 						<Select.Trigger id={`wlan-${wlan.wlan}-chan`} class="w-full">
-							<Select.Value placeholder="Unchanged" />
+							<Select.Value placeholder="Channel" />
 						</Select.Trigger>
 						<Select.Content>
-							<Select.Item value={UNCHANGED}>Unchanged</Select.Item>
 							<Select.Item value="Auto">Auto</Select.Item>
-							{#each channels as ch (ch)}
+							{#each channelChoices as ch (ch)}
 								<Select.Item value={ch}>{ch}</Select.Item>
 							{/each}
 						</Select.Content>
@@ -210,12 +227,11 @@
 					<Field.FieldLabel for={`wlan-${wlan.wlan}-width`}>Channel width</Field.FieldLabel>
 					<Select.Root type="single" bind:value={bandwidth}>
 						<Select.Trigger id={`wlan-${wlan.wlan}-width`} class="w-full">
-							<Select.Value placeholder="Unchanged" />
+							<Select.Value placeholder="Channel width" />
 						</Select.Trigger>
 						<Select.Content>
-							<Select.Item value={UNCHANGED}>Unchanged</Select.Item>
 							<Select.Item value="Auto">Auto</Select.Item>
-							{#each bandwidths as bw (bw)}
+							{#each bandwidthChoices as bw (bw)}
 								<Select.Item value={bw}>{bw}</Select.Item>
 							{/each}
 						</Select.Content>

@@ -69,6 +69,8 @@ func parseWLANEntry(key string, value interface{}, onlyEnabled bool) (WLANConfig
 		MaxClients: getMaxClients(wlan),
 		AuthMode:   getAuthMode(wlan),
 		Encryption: getEncryption(wlan),
+		Channel:    getChannel(wlan),
+		Bandwidth:  getWLANString(wlan, "OperatingChannelBandwidth"),
 		Enabled:    enabled,
 	}, true
 }
@@ -220,6 +222,32 @@ func getBand(wlan map[string]interface{}, wlanKey string) string {
 		}
 	}
 	return "Unknown"
+}
+
+// getChannel returns the configured channel, or ChannelAuto when
+// AutoChannelEnable is on. Empty when the CPE exposes neither.
+func getChannel(wlan map[string]interface{}) string {
+	if auto, ok := wlan["AutoChannelEnable"].(map[string]interface{}); ok {
+		if v, ok := auto["_value"].(bool); ok && v {
+			return ChannelAuto
+		}
+	}
+	if ch, ok := wlan["Channel"].(map[string]interface{}); ok {
+		if v, ok := ch["_value"].(float64); ok && v > 0 {
+			return strconv.Itoa(int(v))
+		}
+	}
+	return ""
+}
+
+// getWLANString reads one string field from a raw WLAN subtree ("" if absent).
+func getWLANString(wlan map[string]interface{}, field string) string {
+	if m, ok := wlan[field].(map[string]interface{}); ok {
+		if v, ok := m["_value"].(string); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // getHidden checks if SSID broadcast is disabled (hidden network)

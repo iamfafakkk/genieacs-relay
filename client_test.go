@@ -856,8 +856,29 @@ func TestGetWLANData_InvalidEntryType(t *testing.T) {
 	assert.Len(t, wlanData, 1)
 }
 
-// --- DHCP Clients Tests ---
+func TestParseWLANEntry_ChannelAndBandwidth(t *testing.T) {
+	// Auto channel wins over a stale numeric Channel value.
+	auto := getChannel(map[string]interface{}{
+		"AutoChannelEnable": map[string]interface{}{"_value": true},
+		"Channel":           map[string]interface{}{"_value": float64(6)},
+	})
+	assert.Equal(t, "Auto", auto)
 
+	fixed := getChannel(map[string]interface{}{
+		"AutoChannelEnable": map[string]interface{}{"_value": false},
+		"Channel":           map[string]interface{}{"_value": float64(149)},
+	})
+	assert.Equal(t, "149", fixed)
+
+	assert.Equal(t, "", getChannel(map[string]interface{}{}))
+
+	bw := getWLANString(map[string]interface{}{
+		"OperatingChannelBandwidth": map[string]interface{}{"_value": "80MHz"},
+	}, "OperatingChannelBandwidth")
+	assert.Equal(t, "80MHz", bw)
+}
+
+// --- DHCP Clients Tests ---
 func TestGetDHCPClients_Success(t *testing.T) {
 	ctx := context.Background()
 	deviceData := map[string]interface{}{

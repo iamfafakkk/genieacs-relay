@@ -84,6 +84,10 @@ export interface WLANConfig {
 	hidden: boolean;
 	auth_mode?: string;
 	encryption?: string;
+	/** Configured channel: "Auto" or a channel number (absent if the CPE hides it). */
+	channel?: string;
+	/** Operating channel bandwidth, e.g. "20MHz". */
+	bandwidth?: string;
 	enabled: boolean;
 }
 

@@ -20,6 +20,8 @@ type WLANConfig struct {
 	MaxClients int    `json:"max_clients,omitempty"` // Maximum number of associated devices
 	AuthMode   string `json:"auth_mode,omitempty"`   // Authentication mode (Open, WPA, WPA2, WPA/WPA2)
 	Encryption string `json:"encryption,omitempty"`  // Encryption mode (AES, TKIP, TKIP+AES)
+	Channel    string `json:"channel,omitempty"`     // Configured channel: "Auto" or a channel number
+	Bandwidth  string `json:"bandwidth,omitempty"`   // Operating channel bandwidth (e.g. "20MHz")
 	Enabled    bool   `json:"enabled"`               // TR-069 Enable flag (raw); true = slot actively broadcasting
 }
 
