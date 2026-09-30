@@ -81,30 +81,36 @@ func TestSubmitWLANUpdate_QueueFull(t *testing.T) {
 	})
 }
 
-// --- H-05: Primary WLAN deletion protection ---
+// --- WLAN deletion: primary slots may now be disabled too ---
 
-func TestDeleteWLANHandler_PrimaryProtection(t *testing.T) {
+func TestDeleteWLANHandler_AllowsPrimary(t *testing.T) {
 	mockHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Query().Get("projection"), "_id") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(mockDeviceResponseWithLastInform()))
+			return
+		}
+		if strings.Contains(r.URL.Query().Get("query"), mockDeviceID) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("[" + mockDeviceDataJSON + "]"))
+			return
+		}
+		if r.Method == "POST" && strings.Contains(r.URL.Path, "/tasks") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"_id": "task123"}`))
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(mockDeviceResponseWithLastInform()))
 	})
 	_, router := setupTestServer(t, mockHandler)
 
-	t.Run("Reject delete WLAN 1", func(t *testing.T) {
-		req := httptest.NewRequest("DELETE", "/api/v1/genieacs/wlan/delete/1/"+mockDeviceIP, nil)
+	for _, wlan := range []string{"1", "5"} {
+		req := httptest.NewRequest("DELETE", "/api/v1/genieacs/wlan/delete/"+wlan+"/"+mockDeviceIP, nil)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
-		assert.Equal(t, http.StatusBadRequest, rr.Code)
-		assert.Contains(t, rr.Body.String(), ErrDeletePrimaryWLAN)
-	})
-
-	t.Run("Reject delete WLAN 5", func(t *testing.T) {
-		req := httptest.NewRequest("DELETE", "/api/v1/genieacs/wlan/delete/5/"+mockDeviceIP, nil)
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		assert.Equal(t, http.StatusBadRequest, rr.Code)
-		assert.Contains(t, rr.Body.String(), ErrDeletePrimaryWLAN)
-	})
+		assert.Equal(t, http.StatusOK, rr.Code, "WLAN %s should be deletable", wlan)
+		assert.Contains(t, rr.Body.String(), "deletion submitted successfully")
+	}
 }
 
 // --- WLAN handler queue-full (503) tests ---

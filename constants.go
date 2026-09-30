@@ -292,7 +292,6 @@ const (
 	ErrGetDeviceCapability  = "Failed to get device capability"
 	ErrGetWLANData          = "Failed to get WLAN data"
 	ErrWorkerPoolBusy       = "Server is busy processing other requests. Please try again shortly."
-	ErrDeletePrimaryWLAN    = "Cannot delete primary WLAN (ID 1 or 5). This would disable the device's primary WiFi connectivity."
 
 	// v2.2.0 — CPE lifecycle, status, params, PPPoE
 	ErrFactoryResetFailed      = "FactoryReset task submission failed"

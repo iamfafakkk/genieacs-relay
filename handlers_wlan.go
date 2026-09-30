@@ -356,12 +356,6 @@ func deleteWLANHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Protect primary WLANs (ID 1 for 2.4GHz, ID 5 for 5GHz) from deletion
-	if wlanID == WLAN24GHzMin || wlanID == WLAN5GHzMin {
-		sendError(w, r, http.StatusBadRequest, ErrCodeValidation, ErrDeletePrimaryWLAN)
-		return
-	}
-
 	// Get device ID from IP
 	deviceID, ok := ExtractDeviceIDByIP(w, r)
 	if !ok {
