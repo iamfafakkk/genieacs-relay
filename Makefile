@@ -47,14 +47,22 @@ build:
 	@echo ">> Building binary..."
 	go build -o $(BIN_DIR)/api main.go
 
+# Load .env into the recipe shell (no-op when .env is absent).
+# ponytail: shell sourced, so keep .env values free of spaces/quoting.
+# Move to a godotenv import in main.go if `go run .` must also honor .env.
+LOAD_ENV = set -a; [ -f .env ] && . ./.env; set +a;
+
 ## run: Build and run the application locally
 run: build
 	@echo ">> Running application locally..."
-	./$(BIN_DIR)/api
+	@$(LOAD_ENV) ./$(BIN_DIR)/api
 
 ## dev: Run the application with hot-reload (Air)
 dev:
 	@echo ">> Starting development server with Air hot-reload..."
+	@PATH="$$PATH:$$(go env GOPATH)/bin"; $(LOAD_ENV) \
+	command -v air >/dev/null 2>&1 || \
+		{ echo "air not found. Install: go install github.com/air-verse/air@latest"; exit 1; }; \
 	air -c .air.toml
 
 # Testing
