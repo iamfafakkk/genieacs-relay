@@ -15,7 +15,7 @@
 	}
 </script>
 
-<Sidebar.Root collapsible="offcanvas">
+<Sidebar.Root collapsible="icon">
 	<Sidebar.Header>
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
@@ -66,9 +66,16 @@
 	<Sidebar.Footer>
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
-				<Sidebar.MenuButton onclick={logout} tooltipContent="Log out">
-					<LogOutIcon />
-					<span>Log out</span>
+				<Sidebar.MenuButton size="lg" onclick={logout} tooltipContent="Log out">
+					<div
+						class="bg-muted text-muted-foreground flex aspect-square size-8 items-center justify-center rounded-lg"
+					>
+						<LogOutIcon />
+					</div>
+					<div class="grid flex-1 text-left text-sm leading-tight">
+						<span class="truncate font-medium">Log out</span>
+						<span class="text-muted-foreground truncate text-xs">End session</span>
+					</div>
 				</Sidebar.MenuButton>
 			</Sidebar.MenuItem>
 		</Sidebar.Menu>
