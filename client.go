@@ -199,8 +199,13 @@ func getDeviceIDByIP(ctx context.Context, ip string) (string, error) {
 
 // setParameterValues sends parameter value changes to device via GenieACS
 func setParameterValues(ctx context.Context, deviceID string, parameterValues [][]interface{}) error {
-	// Build URL for task creation endpoint
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks", geniesBaseURL, url.PathEscape(deviceID))
+	// Build URL for task creation endpoint.
+	// connection_request makes GenieACS poke the CPE via its ConnectionRequest
+	// URL so the change lands immediately. If the CPE can't be reached (NAT,
+	// offline) the task is simply left queued and applies on the next periodic
+	// inform — GenieACS returns 202 Accepted instead of 200 OK, and both are
+	// success per the NBI contract (checked below).
+	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request", geniesBaseURL, url.PathEscape(deviceID))
 	// Prepare payload for setParameterValues task
 	payload := map[string]interface{}{"name": "setParameterValues", "parameterValues": parameterValues}
 	// Send POST request to set parameter values

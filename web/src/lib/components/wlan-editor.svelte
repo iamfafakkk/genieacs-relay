@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { setWLANEnabled, updateWLAN, updateWLANRadio } from '$lib/api/device';
+	import { updateWLAN, updateWLANRadio } from '$lib/api/device';
 	import type { WLANConfig } from '$lib/api/types';
 	import * as Card from '$lib/components/ui/card';
 	import * as Field from '$lib/components/ui/field';
@@ -9,7 +9,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import PowerIcon from '@lucide/svelte/icons/power';
 	import SaveIcon from '@lucide/svelte/icons/save';
 
 	let {
@@ -46,18 +45,12 @@
 	let channel = $state(UNCHANGED);
 	let bandwidth = $state(UNCHANGED);
 	let busy = $state(false);
-	let toggling = $state(false);
-	// Optimistic: the CPE only applies the change on its next inform (~30s),
-	// so mirror the operator's intent locally instead of a stale re-fetch.
-	// svelte-ignore state_referenced_locally
-	let enabled = $state(wlan.enabled);
 
 	// Re-sync drafts when the parent replaces the config (e.g. page refresh).
 	$effect(() => {
 		ssid = wlan.ssid;
 		authMode = wlan.auth_mode || 'WPA2';
 		encryption = wlan.encryption || 'AES';
-		enabled = wlan.enabled;
 	});
 
 	function errMessage(e: unknown): string {
@@ -77,7 +70,9 @@
 			if (bandwidth !== UNCHANGED) radio.bandwidth = bandwidth;
 			if (Object.keys(radio).length > 0) await updateWLANRadio(ip, wlan.wlan, radio);
 
-			toast.success(`WLAN ${wlan.wlan} settings submitted — applied within ~30s.`);
+			toast.success(
+				`WLAN ${wlan.wlan} settings submitted — pushed now if the CPE responds, else on its next inform (~30s).`
+			);
 			password = '';
 			channel = UNCHANGED;
 			bandwidth = UNCHANGED;
@@ -87,52 +82,16 @@
 			busy = false;
 		}
 	}
-
-	async function toggle() {
-		if (!ip) return;
-		toggling = true;
-		try {
-			const next = !enabled;
-			await setWLANEnabled(ip, wlan.wlan, next);
-			enabled = next;
-			toast.success(`WLAN ${wlan.wlan} ${next ? 'enabled' : 'disabled'} — applied within ~30s.`);
-		} catch (e) {
-			toast.error(`WLAN ${wlan.wlan} ${enabled ? 'disable' : 'enable'} failed: ${errMessage(e)}`);
-		} finally {
-			toggling = false;
-		}
-	}
 </script>
 
 <Card.Root>
 	<Card.Header>
-		<div class="flex flex-wrap items-center justify-between gap-2">
-			<div class="flex flex-wrap items-center gap-2">
-				<Card.Title>WLAN {wlan.wlan}</Card.Title>
-				<Badge
-					variant="outline"
-					class={enabled ? 'border-success/50 text-success' : 'text-muted-foreground'}
-				>
-					{enabled ? 'enabled' : 'disabled'}
-				</Badge>
-				<Badge variant="outline" class="text-muted-foreground">{wlan.band}</Badge>
-				{#if currentChannel}
-					<Badge variant="outline" class="text-muted-foreground">channel {currentChannel}</Badge>
-				{/if}
-			</div>
-			<Button
-				variant={enabled ? 'outline' : 'default'}
-				size="sm"
-				onclick={toggle}
-				disabled={toggling || !ip}
-			>
-				{#if toggling}
-					<Spinner data-icon="inline-start" />
-				{:else}
-					<PowerIcon data-icon="inline-start" />
-				{/if}
-				{enabled ? 'Disable' : 'Enable'}
-			</Button>
+		<div class="flex flex-wrap items-center gap-2">
+			<Card.Title>WLAN {wlan.wlan}</Card.Title>
+			<Badge variant="outline" class="text-muted-foreground">{wlan.band}</Badge>
+			{#if currentChannel}
+				<Badge variant="outline" class="text-muted-foreground">channel {currentChannel}</Badge>
+			{/if}
 		</div>
 	</Card.Header>
 	<Card.Content>

@@ -13,6 +13,22 @@ func TestTaskTypeConstants(t *testing.T) {
 	assert.Equal(t, "refreshWLAN", TaskTypeRefreshWLAN)
 }
 
+// TestValidAuthModes verifies the UI auth-mode labels map to the TR-069
+// BeaconType enum. A CPE rejects any other string with fault 9007, so a wrong
+// mapping (e.g. "Open" instead of "None") breaks the whole WLAN update.
+func TestValidAuthModes(t *testing.T) {
+	assert.Equal(t, "None", ValidAuthModes["Open"])
+	assert.Equal(t, "WPA", ValidAuthModes["WPA"])
+	assert.Equal(t, "11i", ValidAuthModes["WPA2"])
+	assert.Equal(t, "WPAand11i", ValidAuthModes["WPA/WPA2"])
+
+	// Every mapped value must be a valid TR-069 BeaconType enum member.
+	valid := map[string]bool{"None": true, "Basic": true, "WPA": true, "11i": true, "WPAand11i": true}
+	for label, beacon := range ValidAuthModes {
+		assert.True(t, valid[beacon], "auth mode %q maps to invalid BeaconType %q", label, beacon)
+	}
+}
+
 func TestLegacyTaskTypeConstants(t *testing.T) {
 	// Test backward compatibility
 	assert.Equal(t, TaskTypeSetParams, taskTypeSetParams)

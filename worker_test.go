@@ -100,8 +100,41 @@ func TestWorkerPool_EdgeCases(t *testing.T) {
 	})
 }
 
-// --- Worker Pool Deadlock Prevention Tests ---
+// TestWorker_ClearsCacheAfterTask verifies the device cache is invalidated by
+// the worker once a task completes, not at submit time. Clearing at submit
+// time let a read racing the write re-cache the pre-change snapshot for the
+// full TTL, making connection_request writes appear to take ~30s.
+func TestWorker_ClearsCacheAfterTask(t *testing.T) {
+	logger, _ = zap.NewDevelopment()
+	originalHTTPClient := httpClient
+	originalBaseURL := geniesBaseURL
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(mockServer.Close)
+	httpClient = mockServer.Client()
+	geniesBaseURL = mockServer.URL
+	t.Cleanup(func() {
+		httpClient = originalHTTPClient
+		geniesBaseURL = originalBaseURL
+	})
 
+	originalCache := deviceCacheInstance
+	deviceCacheInstance = &deviceCache{data: make(map[string]cachedDeviceData), timeout: DefaultCacheTimeout}
+	t.Cleanup(func() { deviceCacheInstance = originalCache })
+
+	deviceCacheInstance.set("cache-device", map[string]interface{}{"stale": true})
+
+	wp := &workerPool{workers: 1, queue: make(chan task, 10), wg: sync.WaitGroup{}}
+	wp.Start()
+	wp.Submit("cache-device", taskTypeSetParams, [][]interface{}{{"p", "v", "xsd:string"}})
+	wp.Stop()
+
+	_, found := deviceCacheInstance.get("cache-device")
+	assert.False(t, found, "cache should be cleared once the worker applied the task")
+}
+
+// --- Worker Pool Deadlock Prevention Tests ---
 func TestWorkerPoolNonBlockingSubmit(t *testing.T) {
 	// Setup logger
 	logger, _ = zap.NewDevelopment()

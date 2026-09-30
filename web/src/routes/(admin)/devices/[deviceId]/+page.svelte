@@ -12,6 +12,7 @@
 		opticalStats,
 		rebootDevice,
 		setPPPoECredentials,
+		setWLANEnabled,
 		wakeDevice,
 		wanStatus,
 		wifiClients,
@@ -41,6 +42,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Separator } from '$lib/components/ui/separator';
+	import { Switch } from '$lib/components/ui/switch';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
@@ -87,12 +89,23 @@
 	let pppoeUser = $state('');
 	let pppoePass = $state('');
 	let pppoeBusy = $state(false);
+	// Optimistic enable/disable per slot: the CPE only reflects the change
+	// on its next inform (~30s), so mirror operator intent locally instead
+	// of showing a stale re-fetch.
+	let wlanEnabled = $state<Record<string, boolean>>({});
+	let wlanToggling = $state<Record<string, boolean>>({});
 
 	const ip = $derived(summary?.ip ?? '');
 	const online = $derived(summary ? isOnline(summary) : (status?.online ?? false));
 	const wlanChannels = $derived(
 		new Map((radioStats ?? []).map((r) => [String(r.wlan), r.channel] as const))
 	);
+	/** Slot as currently displayed: server value unless locally overridden. */
+	function shownWlan(w: WLANConfig): WLANConfig {
+		const o = wlanEnabled[w.wlan];
+		return o === undefined || o === w.enabled ? w : { ...w, enabled: o };
+	}
+	const shownWlans = $derived((wlans ?? []).map(shownWlan));
 
 	function isOnline(d: DeviceSummary): boolean {
 		if (!d.last_inform) return false;
@@ -241,7 +254,24 @@
 		await runAction('WLAN refresh', async () => {
 			await wifiConnectivityRefresh(ip);
 			wlans = await wlanConfigs(ip, true);
+			wlanEnabled = {};
 		});
+	}
+
+	async function toggleWlan(w: WLANConfig, next: boolean) {
+		if (!ip) return;
+		wlanToggling = { ...wlanToggling, [w.wlan]: true };
+		try {
+			await setWLANEnabled(ip, w.wlan, next);
+			wlanEnabled = { ...wlanEnabled, [w.wlan]: next };
+			toast.success(
+				`WLAN ${w.wlan} ${next ? 'enabled' : 'disabled'} — pushed now if the CPE responds, else on its next inform (~30s).`
+			);
+		} catch (e) {
+			toast.error(`WLAN ${w.wlan} ${next ? 'enable' : 'disable'} failed: ${errMessage(e)}`);
+		} finally {
+			wlanToggling = { ...wlanToggling, [w.wlan]: false };
+		}
 	}
 
 	async function runAction(label: string, fn: () => Promise<unknown>) {
@@ -549,16 +579,16 @@
 										</Table.Row>
 									</Table.Header>
 									<Table.Body>
-										{#each wlans as w (w.wlan)}
+										{#each shownWlans as w (w.wlan)}
 											<Table.Row>
 												<Table.Cell>{w.wlan}</Table.Cell>
 												<Table.Cell>
-													<Badge
-														variant="outline"
-														class={w.enabled ? 'border-success/50 text-success' : 'text-muted-foreground'}
-													>
-														{w.enabled ? 'yes' : 'no'}
-													</Badge>
+													<Switch
+														checked={w.enabled}
+														disabled={!ip || wlanToggling[w.wlan]}
+														onCheckedChange={(v) => toggleWlan(w, v)}
+														aria-label={`Toggle WLAN ${w.wlan}`}
+													/>
 												</Table.Cell>
 												<Table.Cell>{w.ssid}</Table.Cell>
 												<Table.Cell>{w.band}</Table.Cell>
@@ -576,16 +606,20 @@
 					<Card.Header>
 						<Card.Title>WLAN configuration</Card.Title>
 						<Card.Description>
-							Enable/disable a slot and edit its SSID, security, password, channel, and width.
+							Edit the SSID, security, password, channel, and width of an enabled slot. Enable a
+							slot above to configure it here.
 						</Card.Description>
 					</Card.Header>
 					<Card.Content class="flex flex-col gap-4">
 						{#if wlans === null}
 							<Skeleton class="h-16 w-full" />
-						{:else if wlans.length === 0}
-							{@render EmptyState({ title: 'No WLAN slots', description: 'The CPE reports no WLAN configuration to edit.' })}
+						{:else if !shownWlans.some((w) => w.enabled)}
+							{@render EmptyState({
+								title: 'No enabled WLAN slots',
+								description: 'Enable a slot in the WLAN slots table above to edit its settings.'
+							})}
 						{:else}
-							{#each wlans as w (w.wlan)}
+							{#each shownWlans.filter((w) => w.enabled) as w (w.wlan)}
 								<WlanEditor {ip} wlan={w} currentChannel={wlanChannels.get(w.wlan)} />
 							{/each}
 						{/if}

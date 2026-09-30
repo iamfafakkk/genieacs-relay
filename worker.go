@@ -67,14 +67,24 @@ func (wp *workerPool) worker() {
 		// Release context resources
 		cancel()
 
-		// Log any errors encountered during task execution
 		if err != nil {
+			// Log any errors encountered during task execution
 			logger.Error("Worker task failed",
 				zap.String("deviceID", t.deviceID),
 				zap.String("taskType", t.taskType),
 				zap.Error(err),
 			)
+			continue
 		}
+
+		// Invalidate the device cache only after the task has actually been
+		// applied. setParameterValues uses ?connection_request, so by the
+		// time we get here the CPE has already been poked (or the request
+		// failed and the task sits queued for the next inform). Clearing at
+		// submit time instead would let a read racing the write re-cache the
+		// pre-change snapshot for the full TTL — the change then appears to
+		// take ~30s even though it landed in ~2s.
+		deviceCacheInstance.clear(t.deviceID)
 	}
 }
 

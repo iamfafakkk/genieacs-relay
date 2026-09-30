@@ -454,9 +454,15 @@ const (
 	PathWLAN11iAuthModeFormat        = "InternetGatewayDevice.LANDevice.1.WLANConfiguration.%s.IEEE11iAuthenticationMode"
 )
 
-// WLAN Authentication modes (BeaconType values in TR-069)
+// WLAN Authentication modes (BeaconType values in TR-069).
+//
+// BeaconType is a TR-069 enum with exactly these values (see the
+// InternetGatewayDevice data model): None|Basic|WPA|11i|WPAand11i.
+// "Open" (the UI label) must map to "None" — sending the literal string
+// "Open" makes the CPE reject the whole setParameterValues with
+// fault 9007 "Invalid parameter value".
 const (
-	AuthModeOpen    = "Open"      // No security
+	AuthModeOpen    = "None"      // No security (TR-069 enum value)
 	AuthModeWPA     = "WPA"       // WPA only
 	AuthModeWPA2    = "11i"       // WPA2 (IEEE 802.11i)
 	AuthModeWPAWPA2 = "WPAand11i" // WPA/WPA2 mixed mode

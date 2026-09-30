@@ -192,8 +192,13 @@ func ParseJSONRequest(w http.ResponseWriter, r *http.Request, v interface{}) boo
 	return true
 }
 
-// SubmitWLANUpdate submits parameter updates to a device and clears cache.
-// Returns an error if the worker pool queue is full and cannot accept tasks.
+// SubmitWLANUpdate submits parameter updates to a device. Returns an error
+// if the worker pool queue is full and cannot accept tasks.
+//
+// The device cache is NOT cleared here: the tasks are async and clearing now
+// would let a read racing the write re-cache the pre-change snapshot for the
+// full TTL. The worker clears the cache once the setParameterValues task has
+// actually been applied (see worker.go).
 func SubmitWLANUpdate(deviceID string, parameterValues [][]interface{}) error {
 	if !taskWorkerPool.Submit(deviceID, taskTypeSetParams, parameterValues) {
 		return fmt.Errorf("worker pool queue full, unable to submit setParameterValues task")
@@ -201,7 +206,6 @@ func SubmitWLANUpdate(deviceID string, parameterValues [][]interface{}) error {
 	if !taskWorkerPool.Submit(deviceID, taskTypeApplyChanges, nil) {
 		return fmt.Errorf("worker pool queue full, unable to submit applyChanges task")
 	}
-	deviceCacheInstance.clear(deviceID)
 	return nil
 }
 

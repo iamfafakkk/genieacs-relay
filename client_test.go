@@ -1053,6 +1053,24 @@ func TestSetParameterValuesNonOKWithBodyReadError(t *testing.T) {
 	}
 }
 
+func TestSetParameterValuesUsesConnectionRequest(t *testing.T) {
+	ctx := context.Background()
+	var gotQuery string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockServer.Close()
+	geniesBaseURL = mockServer.URL
+
+	err := setParameterValues(ctx, mockDeviceID, [][]interface{}{{"param", "value", "type"}})
+	assert.NoError(t, err)
+	// Without connection_request GenieACS waits for the next periodic inform
+	// (~30s); with it the CPE is poked immediately, and a failed poke just
+	// leaves the task queued (202 Accepted).
+	assert.Contains(t, gotQuery, "connection_request")
+}
+
 func TestSetParameterValuesStatusAccepted(t *testing.T) {
 	ctx := context.Background()
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
