@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // --- GenieACS Client Tests ---
@@ -165,6 +167,34 @@ func TestGetDeviceIDByIP_Success(t *testing.T) {
 	deviceID, err := getDeviceIDByIP(ctx, mockDeviceIP)
 	assert.NoError(t, err)
 	assert.Equal(t, mockDeviceID, deviceID)
+}
+
+// TestGetDeviceIDByIP_ResolvesViaConnectionRequestURL covers CPEs (e.g. ZTE
+// F670) whose WAN ExternalIPAddress is blank: the admin list surfaces an IP
+// parsed from ManagementServer.ConnectionRequestURL, so the {ip} lookup must
+// send the ConnectionRequestURL regex clause or every per-device endpoint 404s.
+func TestGetDeviceIDByIP_ResolvesViaConnectionRequestURL(t *testing.T) {
+	ctx := context.Background()
+	var captured string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = r.URL.Query().Get("query")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(mockDeviceResponseWithLastInform()))
+	}))
+	defer mockServer.Close()
+	geniesBaseURL = mockServer.URL
+
+	_, err := getDeviceIDByIP(ctx, mockDeviceIP)
+	assert.NoError(t, err)
+
+	var q ipQuery
+	require.NoError(t, json.Unmarshal([]byte(captured), &q))
+	require.Len(t, q.Or, 4)
+	clause, ok := q.Or[3][FieldConnectionRequestURL].(map[string]interface{})
+	require.True(t, ok, "expected ConnectionRequestURL clause to carry a $regex map")
+	// Anchored on "//" + the IP + a port/path delimiter so it can't match a
+	// different address (e.g. 10.100.251.2280).
+	assert.Equal(t, regexp.QuoteMeta("//"+mockDeviceIP)+`(?:[:/]|$)`, clause["$regex"])
 }
 
 func TestGetDeviceIDByIP_StaleDevice(t *testing.T) {

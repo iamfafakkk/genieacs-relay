@@ -700,6 +700,52 @@ func TestGetOpticalStats_ZTEWanPon_LowercaseAliases(t *testing.T) {
 	assert.InDelta(t, 3.291, stats.VoltageV, 0.001)
 }
 
+// fixtureZTEWanPonRawDOM mirrors ZTE F609 firmware that reports the
+// transceiver's raw SFF-8472 DOM registers as JSON integers instead of
+// scaled physical values. On GET /optical these used to come through as
+// tx=17864, temp=11461, volt=32.6, bias=5200 — nonsense.
+func fixtureZTEWanPonRawDOM() map[string]interface{} {
+	leaf := func(v interface{}) map[string]interface{} {
+		return map[string]interface{}{"_value": v, "_type": "xsd:int"}
+	}
+	return map[string]interface{}{
+		"_id": mockDeviceID,
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"X_ZTE-COM_WANPONInterfaceConfig": map[string]interface{}{
+						"TxPower":                leaf(17864),
+						"RXPower":                leaf(41),
+						"BiasCurrent":            leaf(5200),
+						"TransceiverTemperature": leaf(11461),
+						"SupplyVoltage":          leaf(32600),
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestGetOpticalStats_ZTEWanPon_RawDOM asserts raw SFF-8472 registers are
+// converted to physical units: tx register 17864 → ~+2.5 dBm, RX 41 µW
+// → -23.9 dBm (matches GenieACS VirtualParameters.OpticalRXdBm).
+func TestGetOpticalStats_ZTEWanPon_RawDOM(t *testing.T) {
+	resetCacheForTest(t)
+	srv := stubGenieACSWithDeviceData(t, fixtureZTEWanPonRawDOM())
+	geniesBaseURL = srv.URL
+
+	stats, err := getOpticalStats(context.Background(), mockDeviceID)
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, opticalSourceZTEWanPon, stats.Source)
+	assert.InDelta(t, -23.9, stats.RxPowerDBm, 0.001)
+	assert.InDelta(t, 2.52, stats.TxPowerDBm, 0.05)
+	assert.InDelta(t, 10.40, stats.BiasCurrentMA, 0.001) // 5200 / 500
+	assert.InDelta(t, 44.77, stats.TemperatureC, 0.01)   // 11461 / 256
+	assert.InDelta(t, 3.26, stats.VoltageV, 0.001)       // 32600 / 10000
+	assert.Equal(t, "good", stats.Health)                // -23.9 dBm is above the -24 warning threshold
+}
+
 func TestReadFloat_StringValue(t *testing.T) {
 	parent := map[string]interface{}{
 		"TXPower": map[string]interface{}{"_value": "2.59", "_type": "xsd:string"},

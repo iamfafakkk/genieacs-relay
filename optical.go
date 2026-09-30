@@ -316,18 +316,30 @@ func extractZTECTComGpon(deviceData map[string]interface{}, stats *OpticalStats)
 // Note the uppercase `TXPower` / `RXPower` (ZTE convention) vs the
 // camelCase `TxPower` / `RxPower` used by X_CT-COM. We try both so the
 // same extractor works for mixed firmware lines in the wild.
+//
+// Some firmware (verified on ZTE F609) instead reports raw SFF-8472 DOM
+// registers — RX 41, TX 17864, bias 5200, temp 11461, Vcc 32600 — which
+// are unreadable without scaling. isRawDOMTree detects that encoding
+// and domScaled applies the per-field register conversion. RX always
+// goes through rawRxToDBm, which is sign-safe for both encodings.
 func extractZTEWanPon(deviceData map[string]interface{}, stats *OpticalStats) bool {
 	root := navigateNested(deviceData,
 		"InternetGatewayDevice", "WANDevice", "1", "X_ZTE-COM_WANPONInterfaceConfig")
 	if root == nil {
 		return false
 	}
+	raw := isRawDOMTree(root)
+
 	stats.Source = opticalSourceZTEWanPon
-	stats.TxPowerDBm = firstNonZeroFloat(root, "TXPower", "TxPower")
-	stats.RxPowerDBm = firstNonZeroFloat(root, "RXPower", "RxPower")
-	stats.BiasCurrentMA = readFloat(root, "BiasCurrent")
-	stats.TemperatureC = firstNonZeroFloat(root, "TransceiverTemperature", "Temperature")
-	stats.VoltageV = normalizeSupplyVoltage(readFloat(root, "SupplyVoltage"))
+	stats.RxPowerDBm = rxDBm(root, "RXPower", "RxPower")
+	stats.TxPowerDBm = domScaled(firstNonZeroFloat(root, "TXPower", "TxPower"), "tx", raw)
+	stats.BiasCurrentMA = domScaled(readFloat(root, "BiasCurrent"), "bias", raw)
+	stats.TemperatureC = domScaled(firstNonZeroFloat(root, "TransceiverTemperature", "Temperature"), "temp", raw)
+	if raw {
+		stats.VoltageV = domScaled(readFloat(root, "SupplyVoltage"), "vcc", true)
+	} else {
+		stats.VoltageV = normalizeSupplyVoltage(readFloat(root, "SupplyVoltage"))
+	}
 	return true
 }
 
@@ -360,14 +372,18 @@ func extractHuaweiGpon(deviceData map[string]interface{}, stats *OpticalStats) b
 	if tree == nil {
 		return false
 	}
+	raw := isRawDOMTree(tree)
+
 	stats.Source = opticalSourceHuaweiGpon
-	stats.TxPowerDBm = firstNonZeroFloat(tree, "TXPower", "TxPower")
-	if v := firstNonZeroFloat(tree, "RXPower", "RxPower"); v != 0 {
-		stats.RxPowerDBm = rawRxToDBm(v)
+	stats.RxPowerDBm = rxDBm(tree, "RXPower", "RxPower")
+	stats.TxPowerDBm = domScaled(firstNonZeroFloat(tree, "TXPower", "TxPower"), "tx", raw)
+	stats.BiasCurrentMA = domScaled(firstNonZeroFloat(tree, "BiasCurrent"), "bias", raw)
+	stats.TemperatureC = domScaled(firstNonZeroFloat(tree, "TransceiverTemperature", "Temperature"), "temp", raw)
+	if raw {
+		stats.VoltageV = domScaled(firstNonZeroFloat(tree, "SupplyVoltage"), "vcc", true)
+	} else {
+		stats.VoltageV = normalizeSupplyVoltage(firstNonZeroFloat(tree, "SupplyVoltage"))
 	}
-	stats.BiasCurrentMA = firstNonZeroFloat(tree, "BiasCurrent")
-	stats.TemperatureC = firstNonZeroFloat(tree, "TransceiverTemperature", "Temperature")
-	stats.VoltageV = normalizeSupplyVoltage(firstNonZeroFloat(tree, "SupplyVoltage"))
 	return true
 }
 
@@ -546,6 +562,76 @@ func readFloat(parent map[string]interface{}, key string) float64 {
 	}
 	return 0
 }
+
+// rawValueType was replaced by magnitude-based detection; removed.
+
+// isRawDOMTree detects whether a transceiver tree reports raw SFF-8472
+// register values rather than pre-scaled physical ones. It keys on TX
+// power and temperature magnitude because no physical reading is ever
+// that large (Tx dBm ≈ -3..+5, temp ≈ 0..80 °C, Vcc ≈ 3.3 V), whereas
+// the raw registers are in the thousands. Some firmware reports these
+// as JSON integers, others as decimal strings, so magnitude is a more
+// robust discriminator than the JSON type.
+//
+// Reads direct children via firstNonZeroFloat (not FirstLeafFloat,
+// which only matches leaves nested ≥2 levels deep).
+func isRawDOMTree(tree map[string]interface{}) bool {
+	if tx := firstNonZeroFloat(tree, "TXPower", "TxPower"); tx > 100 || tx < -100 {
+		return true
+	}
+	if temp := firstNonZeroFloat(tree, "TransceiverTemperature", "Temperature"); temp > 100 || temp < -100 {
+		return true
+	}
+	return false
+}
+
+// rxDBm reads an RX-power leaf and normalizes it to dBm. RX is always
+// run through rawRxToDBm: a negative value is already dBm (passes
+// through), while a positive value is linear µW (raw register or
+// vendor decimal), which is never a valid dBm reading. 0 (absent leaf)
+// stays 0 — the "not reported" sentinel.
+func rxDBm(parent map[string]interface{}, keys ...string) float64 {
+	if v := firstNonZeroFloat(parent, keys...); v != 0 {
+		return rawRxToDBm(v)
+	}
+	return 0
+}
+
+// domScaled converts a raw optical-DOM register reading to its physical
+// unit, for CPEs that report the transceiver's raw SFF-8472 values
+// instead of pre-scaled ones.
+//
+// The on-wire encodings differ per field, matching the SFF-8472
+// convention GenieACS virtual parameters use for these ZTE F609/F670
+// units (verified against the fleet's VirtualParameters.OpticalRXdBm):
+//
+//	tx:   linear µW (0.1 µW LSB) → dBm via rawRxToDBm
+//	bias: 2 µA LSB  → mA   = value/500
+//	temp: 1/256 °C LSB → °C = value/256
+//	vcc:  100 µV LSB → V   = value/10000
+//
+// raw=false (the value is already a physical reading) returns as-is,
+// so the same helper works for decimal vendors. RX is handled by
+// rxDBm instead (sign-based, so it needs no raw flag).
+func domScaled(value float64, field string, raw bool) float64 {
+	if !raw {
+		return value
+	}
+	switch field {
+	case "tx":
+		return rawRxToDBm(value)
+	case "bias":
+		return round2(value / 500)
+	case "temp":
+		return round2(value / 256)
+	case "vcc":
+		return round4(value / 10000)
+	}
+	return value
+}
+
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
+func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
 
 // classifyOpticalHealth derives the categorical Health field from
 // RxPowerDBm using configurable thresholds. Defaults match typical PON

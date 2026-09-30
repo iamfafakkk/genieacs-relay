@@ -28,6 +28,9 @@ const (
 	FieldSummaryIP   = "summary.ip"
 	FieldWANPPPConn1 = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress._value"
 	FieldWANPPPConn2 = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.2.ExternalIPAddress._value"
+	// FieldConnectionRequestURL is the ACS management URL; its host is used
+	// as an IP fallback when ExternalIPAddress is blank.
+	FieldConnectionRequestURL = "InternetGatewayDevice.ManagementServer.ConnectionRequestURL._value"
 )
 
 // HTTP and timeout configurations

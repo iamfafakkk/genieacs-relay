@@ -8,13 +8,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
 
 // ipQuery represents the MongoDB query structure for IP-based device lookup
 type ipQuery struct {
-	Or []map[string]string `json:"$or"`
+	Or []map[string]interface{} `json:"$or"`
 }
 
 // postJSONRequest sends a POST request with JSON payload to specified URL
@@ -118,12 +119,20 @@ func getDeviceIDByIP(ctx context.Context, ip string) (string, error) {
 		return "", err
 	}
 
-	// Construct query using proper JSON marshaling to prevent injection
+	// Construct query using proper JSON marshaling to prevent injection.
+	// The ConnectionRequestURL clause is a fallback for CPEs whose WAN
+	// ExternalIPAddress is blank (e.g. ZTE F670) — the admin device list
+	// already surfaces such an IP via connectionRequestIP, so the {ip}
+	// lookup must resolve it too or every per-device endpoint 404s.
+	// Anchored on "//" so the port/octet suffix can't match a different IP.
 	queryStruct := ipQuery{
-		Or: []map[string]string{
+		Or: []map[string]interface{}{
 			{FieldSummaryIP: ip},
 			{FieldWANPPPConn1: ip},
 			{FieldWANPPPConn2: ip},
+			{FieldConnectionRequestURL: map[string]interface{}{
+				"$regex": regexp.QuoteMeta("//"+ip) + `(?:[:/]|$)`,
+			}},
 		},
 	}
 
