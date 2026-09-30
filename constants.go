@@ -59,9 +59,14 @@ const (
 	// DefaultAuthKey is intentionally empty - MUST be set via AUTH_KEY environment variable when MIDDLEWARE_AUTH=true
 	DefaultAuthKey = ""
 	//nolint:gosec // G101: header name, not a credential
-	HeaderXAPIKey     = "X-API-Key"
-	EnvMiddlewareAuth = "MIDDLEWARE_AUTH"
-	EnvAuthKey        = "AUTH_KEY"
+	HeaderXAPIKey = "X-API-Key"
+	// HeaderWSAPIKeyParam / HeaderAPIKeyCookie carry the API key for WebSocket
+	// handshakes, where the browser cannot set custom headers. HeaderWSAPIKeyParam
+	// is used by non-browser clients; HeaderAPIKeyCookie matches the admin panel.
+	HeaderWSAPIKeyParam = "api_key"
+	HeaderAPIKeyCookie  = "gr_api_key"
+	EnvMiddlewareAuth   = "MIDDLEWARE_AUTH"
+	EnvAuthKey          = "AUTH_KEY"
 )
 
 // Boolean string representations for env var parsing

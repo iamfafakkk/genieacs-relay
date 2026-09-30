@@ -60,14 +60,21 @@
 				Worker jobs assigned to devices ({jobsState.active} active · {jobsState.count} tracked)
 			</p>
 		</div>
-		<Button variant="outline" size="sm" onclick={manualRefresh} disabled={refreshing}>
-			{#if refreshing}
-				<Spinner data-icon="inline-start" />
+		<div class="flex items-center gap-2">
+			{#if jobsState.connected}
+				<Badge variant="outline" class="border-success/50 text-success">live</Badge>
 			{:else}
-				<RefreshCwIcon data-icon="inline-start" />
+				<Badge variant="outline" class="border-muted-foreground/40 text-muted-foreground">polling</Badge>
 			{/if}
-			Refresh
-		</Button>
+			<Button variant="outline" size="sm" onclick={manualRefresh} disabled={refreshing}>
+				{#if refreshing}
+					<Spinner data-icon="inline-start" />
+				{:else}
+					<RefreshCwIcon data-icon="inline-start" />
+				{/if}
+				Refresh
+			</Button>
+		</div>
 	</div>
 
 	{#if jobsState.error}

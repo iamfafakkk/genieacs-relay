@@ -12,8 +12,9 @@ export default defineConfig(({ mode }) => {
 		server: {
 			// Dev-only: same-origin calls to backend paths reach the Go server.
 			// Key starting with ^ is a RegExp; SvelteKit routes (/, /login) stay local.
+			// ws: true lets the /jobs/ws upgrade through to the backend too.
 			proxy: {
-				'^/(api|healthz?|readyz?|version|metrics|swagger)(/|$)': target
+				'^/(api|healthz?|readyz?|version|metrics|swagger)(/|$)': { target, ws: true }
 			}
 		},
 		plugins: [

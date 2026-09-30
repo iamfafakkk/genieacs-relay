@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -18,6 +21,10 @@ func TestJobRegistry_Lifecycle(t *testing.T) {
 	t.Cleanup(func() { jobRegistryInstance = origRegistry })
 
 	id := jobRegistryInstance.add(TaskTypeSetParams, "dev-1", 2)
+	// IDs must be unique across process restarts, otherwise the panel's
+	// localStorage "already announced" list would suppress new jobs that
+	// reuse a counter value (e.g. after an air hot-reload).
+	assert.Regexp(t, `^job-[0-9a-f]{8}-[0-9]+$`, id)
 	jobs := jobRegistryInstance.list(10)
 	require.Len(t, jobs, 1)
 	assert.Equal(t, JobStatusQueued, jobs[0].Status)
@@ -105,4 +112,44 @@ func TestListJobsHandler(t *testing.T) {
 	assert.Equal(t, 1, list.Active)
 	require.Len(t, list.Jobs, 1)
 	assert.Equal(t, "dev-4", list.Jobs[0].DeviceID)
+}
+
+func TestJobsStreamHandler_PushesOnChange(t *testing.T) {
+	origRegistry := jobRegistryInstance
+	jobRegistryInstance = newJobRegistry(MaxTrackedJobs)
+	t.Cleanup(func() { jobRegistryInstance = origRegistry })
+
+	srv := httptest.NewServer(http.HandlerFunc(jobsStreamHandler))
+	t.Cleanup(srv.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	readState := func() JobListResponse {
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		var msg JobListResponse
+		require.NoError(t, conn.ReadJSON(&msg))
+		return msg
+	}
+
+	// Initial snapshot on connect.
+	first := readState()
+	assert.Equal(t, 0, first.Count)
+
+	// A new job must be pushed without the client asking.
+	jobRegistryInstance.add(TaskTypeSetParams, "dev-ws", 1)
+
+	deadline := time.Now().Add(3 * time.Second)
+	var got JobListResponse
+	for time.Now().Before(deadline) {
+		got = readState()
+		if got.Count == 1 {
+			break
+		}
+	}
+	require.Equal(t, 1, got.Count, "expected the pushed snapshot to include the new job")
+	require.Len(t, got.Jobs, 1)
+	assert.Equal(t, "dev-ws", got.Jobs[0].DeviceID)
 }

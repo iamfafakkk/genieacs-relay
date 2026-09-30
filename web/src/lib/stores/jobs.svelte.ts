@@ -1,17 +1,21 @@
 /**
  * Global worker-job notifier.
  *
- * Polls GET /jobs and raises sonner toasts as jobs progress. Running jobs
- * reappear after a page refresh (their IDs are not persisted until they reach
- * a terminal state), while completed jobs are remembered in localStorage so a
- * refresh does not replay the whole history.
+ * Subscribes to the backend WebSocket (/jobs/ws) and raises sonner toasts as
+ * jobs progress. The backend pushes only on change, so there is no idle
+ * polling. If the socket cannot connect, it falls back to polling so the panel
+ * still works. Terminal jobs are remembered in localStorage so a page refresh
+ * does not replay the whole history; running jobs reappear after refresh.
  */
 import { toast } from 'svelte-sonner';
-import { listJobs, jobLabel, type Job } from '$lib/api/jobs';
+import { listJobs, jobsSocketUrl, jobLabel, type Job } from '$lib/api/jobs';
+import { getApiKey } from '$lib/api/client';
 
-const POLL_MS = 4000;
 const SEEN_KEY = 'gr_jobs_announced';
 const MAX_SEEN = 200;
+const FALLBACK_POLL_MS = 5000;
+const RECONNECT_MIN_MS = 1000;
+const RECONNECT_MAX_MS = 15000;
 
 /** Shared reactive snapshot for the sidebar badge and the Jobs page. */
 export const jobsState = $state({
@@ -19,7 +23,8 @@ export const jobsState = $state({
 	count: 0,
 	jobs: [] as Job[],
 	loaded: false,
-	error: ''
+	error: '',
+	connected: false
 });
 
 const isTerminal = (s: Job['status']) => s === 'success' || s === 'failed';
@@ -38,15 +43,10 @@ function saveSeen(seen: Set<string>): void {
 	localStorage.setItem(SEEN_KEY, JSON.stringify([...seen].slice(-MAX_SEEN)));
 }
 
-/** Fetch the current job list once and update the shared snapshot. */
+/** Fetch the current job list once (fallback / manual refresh). */
 export async function refreshJobs(): Promise<void> {
 	try {
-		const res = await listJobs(100);
-		jobsState.jobs = res.jobs;
-		jobsState.active = res.active;
-		jobsState.count = res.count;
-		jobsState.loaded = true;
-		jobsState.error = '';
+		apply(await listJobs(100));
 	} catch (e) {
 		jobsState.error = e instanceof Error ? e.message : 'Failed to load jobs';
 		jobsState.loaded = true;
@@ -62,46 +62,118 @@ function announce(job: Job) {
 	}
 }
 
-/**
- * Start the polling loop. Idempotent: calling it while already running returns
- * a stop function without spawning a second interval.
- */
-let running = false;
-export function startJobNotifier(): () => void {
-	if (running) return () => {};
-	running = true;
+let seen = new Set<string>();
+let seeded = false;
+let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-	const seen = loadSeen();
-	let seeded = false;
-	let stopped = false;
+/** Replace the snapshot and fire notifications for state transitions. */
+function apply(res: { jobs: Job[]; active: number; count: number }) {
+	jobsState.jobs = res.jobs;
+	jobsState.active = res.active;
+	jobsState.count = res.count;
+	jobsState.loaded = true;
+	jobsState.error = '';
 
-	async function poll() {
-		if (stopped) return;
-		await refreshJobs();
-		for (const job of jobsState.jobs) {
-			if (isTerminal(job.status)) {
-				if (!seen.has(job.id)) {
-					if (seeded) announce(job);
-					seen.add(job.id);
-				}
-			} else if (!seen.has(job.id)) {
-				// Queued/running: keep a loading toast alive across refresh by
-				// keying it on the stable job id.
-				toast.loading(`${jobLabel(job.type)} — ${job.device_id}`, {
-					id: job.id,
-					description: 'Running…'
-				});
+	for (const job of res.jobs) {
+		if (isTerminal(job.status)) {
+			if (!seen.has(job.id)) {
+				if (seeded) announce(job);
+				seen.add(job.id);
 			}
+		} else if (!seen.has(job.id)) {
+			// Queued/running: keep a loading toast alive across refresh by
+			// keying it on the stable job id.
+			toast.loading(`${jobLabel(job.type)} — ${job.device_id}`, {
+				id: job.id,
+				description: 'Running…'
+			});
 		}
-		seeded = true;
-		saveSeen(seen);
 	}
+	seeded = true;
+	saveSeen(seen);
+}
 
-	poll();
-	const timer = setInterval(poll, POLL_MS);
-	return () => {
+function stopFallbackPoll() {
+	if (pollTimer) {
+		clearInterval(pollTimer);
+		pollTimer = undefined;
+	}
+}
+
+function startFallbackPoll() {
+	if (pollTimer) return;
+	pollTimer = setInterval(refreshJobs, FALLBACK_POLL_MS);
+}
+
+/**
+ * Connect the live job stream. Returns a stop function. Calling it again
+ * replaces any previous session (so a dev HMR reload cannot leave a dead
+ * notifier behind).
+ */
+let activeStop: (() => void) | null = null;
+export function startJobNotifier(): () => void {
+	// Tear down a previous session first (idempotent safety for HMR).
+	activeStop?.();
+
+	seen = loadSeen();
+	seeded = false;
+
+	let ws: WebSocket | null = null;
+	let stopped = false;
+	let reconnectDelay = RECONNECT_MIN_MS;
+	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const connect = () => {
+		if (stopped) return;
+		// Pass the key in the query string too: harmless when the middleware is
+		// off, and it lets a non-browser client connect without a cookie.
+		const key = getApiKey();
+		const url = jobsSocketUrl() + (key ? `?api_key=${encodeURIComponent(key)}` : '');
+		try {
+			ws = new WebSocket(url);
+		} catch {
+			startFallbackPoll();
+			return;
+		}
+
+		ws.onopen = () => {
+			reconnectDelay = RECONNECT_MIN_MS;
+			jobsState.connected = true;
+			jobsState.error = '';
+			stopFallbackPoll();
+		};
+		ws.onmessage = (ev) => {
+			try {
+				apply(JSON.parse(ev.data));
+			} catch {
+				/* ignore malformed frame */
+			}
+		};
+		ws.onclose = () => {
+			jobsState.connected = false;
+			if (stopped) return;
+			startFallbackPoll();
+			reconnectTimer = setTimeout(connect, reconnectDelay);
+			reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+		};
+		ws.onerror = () => ws?.close();
+	};
+
+	const stop = () => {
 		stopped = true;
-		running = false;
-		clearInterval(timer);
+		if (reconnectTimer) clearTimeout(reconnectTimer);
+		stopFallbackPoll();
+		ws?.close();
+		ws = null;
+	};
+
+	activeStop = stop;
+	connect();
+	// Seed immediately in case the socket is slow to open.
+	refreshJobs();
+
+	return () => {
+		if (activeStop === stop) activeStop = null;
+		stop();
 	};
 }

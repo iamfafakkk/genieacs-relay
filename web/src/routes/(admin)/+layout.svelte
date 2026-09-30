@@ -7,7 +7,7 @@
 
 	let { children } = $props();
 
-	// Poll worker jobs and raise sonner notifications globally.
+	// Stream worker jobs over WebSocket and raise sonner notifications globally.
 	onMount(startJobNotifier);
 </script>
 

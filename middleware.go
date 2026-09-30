@@ -170,6 +170,15 @@ func (at *authAttemptTracker) cleanup() {
 	}
 }
 
+// isWebSocketUpgrade reports whether r is a WebSocket handshake attempt.
+// The auth middleware uses this to allow credential transport that browsers
+// can actually perform on a WebSocket (query string / cookie), since the
+// X-API-Key header cannot be set from the browser WebSocket API.
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
+		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+}
+
 // AuditLog logs security-relevant events for audit trail
 func AuditLog(eventType, clientIP, deviceID, details string) {
 	logger.Info("AUDIT",
@@ -343,6 +352,18 @@ func apiKeyAuthMiddleware(next http.Handler) http.Handler {
 
 		// Get API key from the header
 		apiKey := r.Header.Get(HeaderXAPIKey)
+
+		// Browsers cannot set headers on a WebSocket handshake, so for upgrade
+		// requests only, also accept the key from the query string or the
+		// admin-panel cookie. All other requests remain header-only.
+		if apiKey == "" && isWebSocketUpgrade(r) {
+			apiKey = r.URL.Query().Get(HeaderWSAPIKeyParam)
+			if apiKey == "" {
+				if c, err := r.Cookie(HeaderAPIKeyCookie); err == nil {
+					apiKey = c.Value
+				}
+			}
+		}
 
 		// Check if an API key is provided
 		if apiKey == "" {

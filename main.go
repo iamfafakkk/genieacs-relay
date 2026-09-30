@@ -86,6 +86,10 @@ var (
 	authKey        string        // API key for authenticating incoming requests
 	staleThreshold time.Duration // Threshold for considering device as stale (default: 10 minutes)
 
+	// corsAllowedOrigins is the parsed CORS_ALLOWED_ORIGINS list, shared with
+	// the jobs WebSocket origin check (see handlers_jobs.go).
+	corsAllowedOrigins []string
+
 	// Optical interface health classification thresholds (dBm).
 	// Used by classifyOpticalHealth in optical.go to bucket the raw
 	// RxPower reading into "good" / "warning" / "critical" / "no_signal".

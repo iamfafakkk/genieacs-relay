@@ -167,8 +167,13 @@ func loadServerConfig(addr string) (*serverConfig, error) {
 	loadStaleThresholdConfig()
 	loadOpticalThresholdConfig()
 
+	corsOrigins := loadCORSConfig()
+	// Package-level copy so non-HTTP-CORS consumers (the jobs WebSocket
+	// origin check) share the same allow-list.
+	corsAllowedOrigins = corsOrigins
+
 	return &serverConfig{
-		corsOrigins: loadCORSConfig(),
+		corsOrigins: corsOrigins,
 		corsMaxAge:  loadCORSMaxAgeConfig(),
 	}, nil
 }
@@ -315,6 +320,7 @@ func runServer(addr string) error {
 		r.Get("/devices/search", searchDevicesHandler)
 		// worker job monitoring (admin panel "Jobs" page + sonner notifications)
 		r.Get("/jobs", listJobsHandler)
+		r.Get("/jobs/ws", jobsStreamHandler)
 		// v2.2.0 — TR-069 diagnostics (M1, M2)
 		r.Post("/diag/ping/{ip}", dispatchPingHandler)
 		r.Post("/diag/traceroute/{ip}", dispatchTraceRouteHandler)

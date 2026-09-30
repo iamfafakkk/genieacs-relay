@@ -8,6 +8,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Switch } from '$lib/components/ui/switch';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import SaveIcon from '@lucide/svelte/icons/save';
 
@@ -41,20 +42,45 @@
 	let authMode = $state(wlan.auth_mode || 'WPA2');
 	// svelte-ignore state_referenced_locally
 	let encryption = $state(wlan.encryption || 'AES');
+	// svelte-ignore state_referenced_locally
+	let hidden = $state(wlan.hidden);
+	let hiddenBusy = $state(false);
 	let password = $state('');
 	let channel = $state(UNCHANGED);
 	let bandwidth = $state(UNCHANGED);
 	let busy = $state(false);
 
 	// Re-sync drafts when the parent replaces the config (e.g. page refresh).
+	// Toggling Hide SSID changes `hidden`, not `wlan`, so this never fights the
+	// operator's click; a real refresh passes a new `wlan` and re-syncs it.
 	$effect(() => {
 		ssid = wlan.ssid;
 		authMode = wlan.auth_mode || 'WPA2';
 		encryption = wlan.encryption || 'AES';
+		hidden = wlan.hidden;
 	});
 
 	function errMessage(e: unknown): string {
 		return e instanceof Error ? e.message : 'Request failed.';
+	}
+
+	// Apply the SSID advertisement change right away (same model as the
+	// enable/disable switch in the slots table) instead of waiting for Save.
+	async function applyHidden(next: boolean) {
+		if (!ip) return;
+		hidden = next;
+		hiddenBusy = true;
+		try {
+			await updateWLAN(ip, wlan.wlan, { hidden: next });
+			toast.success(
+				`WLAN ${wlan.wlan} ${next ? 'hidden' : 'visible'} — pushed now if the CPE responds, else on its next inform (~30s).`
+			);
+		} catch (e) {
+			hidden = !next;
+			toast.error(`WLAN ${wlan.wlan} ${next ? 'hide' : 'unhide'} failed: ${errMessage(e)}`);
+		} finally {
+			hiddenBusy = false;
+		}
 	}
 
 	async function save() {
@@ -106,6 +132,23 @@
 				<Field.Field>
 					<Field.FieldLabel for={`wlan-${wlan.wlan}-ssid`}>SSID</Field.FieldLabel>
 					<Input id={`wlan-${wlan.wlan}-ssid`} bind:value={ssid} disabled={busy} />
+				</Field.Field>
+
+				<Field.Field orientation="horizontal">
+					<Field.Content>
+						<Field.FieldLabel for={`wlan-${wlan.wlan}-hidden`}>
+							Hide SSID
+						</Field.FieldLabel>
+						<Field.FieldDescription>
+							{hidden ? 'Not broadcast' : 'Broadcast publicly'}
+						</Field.FieldDescription>
+					</Field.Content>
+					<Switch
+						id={`wlan-${wlan.wlan}-hidden`}
+						bind:checked={hidden}
+						onCheckedChange={applyHidden}
+						disabled={busy || hiddenBusy || !ip}
+					/>
 				</Field.Field>
 
 				<Field.Field>

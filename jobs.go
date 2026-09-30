@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -40,13 +42,31 @@ type Job struct {
 // jobRegistry keeps the most recent jobs in memory, newest first. It is
 // deliberately process-local: the task queue itself is in-memory, so a
 // restarted relay has no in-flight work to report.
+//
+// version increments on every mutation so a WebSocket subscriber can push
+// only when something actually changed.
 type jobRegistry struct {
-	mu   sync.Mutex
-	jobs []*Job
-	max  int
+	mu      sync.Mutex
+	jobs    []*Job
+	max     int
+	version uint64
 }
 
 var jobSeq uint64
+
+// jobPrefix is a random per-process token. The registry is in-memory and the
+// counter resets on every restart, so IDs must not repeat across restarts —
+// the admin panel remembers announced IDs in localStorage to avoid replaying
+// history, and a reused "job-1" would be silently suppressed as already seen.
+var jobPrefix = newJobPrefix()
+
+func newJobPrefix() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
 
 // jobRegistryInstance is the process-wide registry the HTTP handler reads and
 // the worker pool writes to.
@@ -58,7 +78,7 @@ func newJobRegistry(max int) *jobRegistry {
 
 // add records a new queued job and returns its generated ID.
 func (r *jobRegistry) add(jobType, deviceID string, paramCount int) string {
-	id := fmt.Sprintf("job-%d", atomic.AddUint64(&jobSeq, 1))
+	id := fmt.Sprintf("job-%s-%d", jobPrefix, atomic.AddUint64(&jobSeq, 1))
 	j := &Job{
 		ID:             id,
 		Type:           jobType,
@@ -73,6 +93,7 @@ func (r *jobRegistry) add(jobType, deviceID string, paramCount int) string {
 	if len(r.jobs) > r.max {
 		r.jobs = r.jobs[:r.max]
 	}
+	r.version++
 	return id
 }
 
@@ -84,6 +105,7 @@ func (r *jobRegistry) start(id string) {
 		now := time.Now()
 		j.Status = JobStatusRunning
 		j.StartedAt = &now
+		r.version++
 	}
 }
 
@@ -104,6 +126,7 @@ func (r *jobRegistry) finish(id string, err error) {
 	} else {
 		j.Status = JobStatusSuccess
 	}
+	r.version++
 }
 
 // find returns the job with the given ID. Caller must hold r.mu.
@@ -120,6 +143,11 @@ func (r *jobRegistry) find(id string) *Job {
 func (r *jobRegistry) list(limit int) []Job {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.copyLocked(limit)
+}
+
+// copyLocked returns up to limit jobs as copies. Caller must hold r.mu.
+func (r *jobRegistry) copyLocked(limit int) []Job {
 	n := len(r.jobs)
 	if limit > 0 && limit < n {
 		n = limit
@@ -135,6 +163,11 @@ func (r *jobRegistry) list(limit int) []Job {
 func (r *jobRegistry) active() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.activeLocked()
+}
+
+// activeLocked counts queued/running jobs. Caller must hold r.mu.
+func (r *jobRegistry) activeLocked() int {
 	count := 0
 	for _, j := range r.jobs {
 		if j.Status == JobStatusQueued || j.Status == JobStatusRunning {
@@ -142,6 +175,25 @@ func (r *jobRegistry) active() int {
 		}
 	}
 	return count
+}
+
+// snapshot returns a consistent view (jobs + counters + version) under a
+// single lock acquisition, so a WebSocket push never mixes two moments.
+func (r *jobRegistry) snapshot(limit int) (JobListResponse, uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return JobListResponse{
+		Jobs:   r.copyLocked(limit),
+		Active: r.activeLocked(),
+		Count:  len(r.jobs),
+	}, r.version
+}
+
+// currentVersion returns just the mutation counter, without copying jobs.
+func (r *jobRegistry) currentVersion() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.version
 }
 
 // JobListResponse is the GET /api/v1/genieacs/jobs payload.

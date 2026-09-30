@@ -5,6 +5,7 @@ go 1.26.6
 require (
 	github.com/getsentry/sentry-go v0.49.0
 	github.com/go-chi/chi/v5 v5.3.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/riandyrn/otelchi v0.12.3
 	github.com/sony/gobreaker/v2 v2.4.0
