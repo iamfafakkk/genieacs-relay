@@ -7,7 +7,7 @@
 	import { goto } from '$app/navigation';
 	import { setApiKey } from '$lib/api/client';
 
-	const items = [{ title: 'Dashboard', url: '/', icon: GaugeIcon }];
+	const items = [{ title: 'Devices', url: '/', icon: GaugeIcon }];
 
 	function logout() {
 		setApiKey(null);
@@ -46,7 +46,9 @@
 					{#each items as item (item.url)}
 						<Sidebar.MenuItem>
 							<Sidebar.MenuButton
-								isActive={item.url === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(item.url)}
+								isActive={item.url === '/'
+									? page.url.pathname === '/' || page.url.pathname.startsWith('/devices/')
+									: page.url.pathname.startsWith(item.url)}
 								tooltipContent={item.title}
 							>
 								{#snippet child({ props })}

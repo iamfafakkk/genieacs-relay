@@ -210,7 +210,14 @@
 						<Table.Body>
 							{#each devices as device (device.device_id)}
 								<Table.Row>
-									<Table.Cell class="max-w-64 truncate font-mono text-xs">{device.device_id}</Table.Cell>
+									<Table.Cell class="max-w-64 truncate font-mono text-xs">
+										<a
+											class="hover:text-primary underline-offset-4 hover:underline"
+											href={`/devices/${encodeURIComponent(device.device_id)}`}
+										>
+											{device.device_id}
+										</a>
+									</Table.Cell>
 									<Table.Cell>{device.model ?? '—'}</Table.Cell>
 									<Table.Cell class="font-mono text-xs">{device.serial ?? '—'}</Table.Cell>
 									<Table.Cell class="font-mono text-xs">{device.pppoe_username ?? '—'}</Table.Cell>

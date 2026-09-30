@@ -271,6 +271,131 @@ func TestGetOpticalStats_NotSupported(t *testing.T) {
 	assert.True(t, errors.Is(err, errOpticalNotSupported), "expected errOpticalNotSupported sentinel")
 }
 
+// TestExtractVendorOptical covers the generic catch-all for vendor trees
+// without a dedicated extractor: China Mobile GPON (X_CMCC_GponInterfaceConfig)
+// and China Unicom EPON (X_CU_WANEPONInterfaceConfig).
+func TestExtractVendorOptical(t *testing.T) {
+	cases := []struct {
+		name  string
+		tree  string
+		inner map[string]interface{}
+		want  float64
+	}{
+		{
+			"cmcc gpon linear",
+			"X_CMCC_GponInterfaceConfig",
+			map[string]interface{}{"RXPower": map[string]interface{}{"_value": 30}},
+			-25.2,
+		},
+		{
+			"cu epon optical transceiver",
+			"X_CU_WANEPONInterfaceConfig",
+			map[string]interface{}{"OpticalTransceiver": map[string]interface{}{
+				"RXPower": map[string]interface{}{"_value": 72}}},
+			-21.4,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := map[string]interface{}{
+				"InternetGatewayDevice": map[string]interface{}{
+					"WANDevice": map[string]interface{}{
+						"1": map[string]interface{}{tc.tree: tc.inner},
+					},
+				},
+			}
+			stats := &OpticalStats{}
+			require.True(t, extractVendorOptical(doc, stats))
+			assert.Equal(t, opticalSourceVendorGeneric, stats.Source)
+			assert.InDelta(t, tc.want, stats.RxPowerDBm, 0.05)
+		})
+	}
+
+	// No optics anywhere → the catch-all declines (so the 404 path stays intact).
+	assert.False(t, extractVendorOptical(
+		map[string]interface{}{"InternetGatewayDevice": map[string]interface{}{}}, &OpticalStats{}))
+}
+
+// fixtureHuaweiGpon mirrors a real Huawei HG8245H5: optics live on a
+// WANDevice child named with Huawei's `Interafce` typo. RXPower/TXPower
+// are bare xsd:int values (dBm); SupplyVoltage is millivolts.
+func fixtureHuaweiGpon() map[string]interface{} {
+	return map[string]interface{}{
+		"_id": "00259E-HG8245H5-485754431D082DA3",
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"X_GponInterafceConfig": map[string]interface{}{
+						"RXPower":                map[string]interface{}{"_value": -17},
+						"TXPower":                map[string]interface{}{"_value": 2},
+						"BiasCurrent":            map[string]interface{}{"_value": 19},
+						"TransceiverTemperature": map[string]interface{}{"_value": 47},
+						"SupplyVoltage":          map[string]interface{}{"_value": 3408},
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestGetOpticalStats_HuaweiGpon covers the regression where
+// GET /optical/{ip} returned 404 for Huawei GPON ONTs whose optics live
+// on WANDevice.1.X_GponInterafceConfig (the list endpoint already read
+// the same tree via extractRxPower).
+func TestGetOpticalStats_HuaweiGpon(t *testing.T) {
+	resetCacheForTest(t)
+	srv := stubGenieACSWithDeviceData(t, fixtureHuaweiGpon())
+	geniesBaseURL = srv.URL
+
+	stats, err := getOpticalStats(context.Background(), mockDeviceID)
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, opticalSourceHuaweiGpon, stats.Source)
+	assert.InDelta(t, -17.0, stats.RxPowerDBm, 0.001)
+	assert.InDelta(t, 2.0, stats.TxPowerDBm, 0.001)
+	assert.InDelta(t, 19.0, stats.BiasCurrentMA, 0.001)
+	assert.InDelta(t, 47.0, stats.TemperatureC, 0.001)
+	assert.InDelta(t, 3.408, stats.VoltageV, 0.001)
+	assert.Equal(t, "good", stats.Health)
+}
+
+// TestGetOpticalStats_HuaweiGponInstance2 covers Huawei firmware lines
+// that report the same tree under WANDevice.2.
+func TestGetOpticalStats_HuaweiGponInstance2(t *testing.T) {
+	resetCacheForTest(t)
+	doc := fixtureHuaweiGpon()
+	devices := doc["InternetGatewayDevice"].(map[string]interface{})["WANDevice"].(map[string]interface{})
+	devices["2"] = devices["1"]
+	delete(devices, "1")
+	srv := stubGenieACSWithDeviceData(t, doc)
+	geniesBaseURL = srv.URL
+
+	stats, err := getOpticalStats(context.Background(), mockDeviceID)
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, opticalSourceHuaweiGpon, stats.Source)
+	assert.InDelta(t, -17.0, stats.RxPowerDBm, 0.001)
+}
+
+// TestExtractHuaweiGpon_LinearEncoding covers the positive (linear µW)
+// encoding on the Huawei GPON tree — rawRxToDBm converts it to dBm.
+func TestExtractHuaweiGpon_LinearEncoding(t *testing.T) {
+	doc := map[string]interface{}{
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"X_GponInterafceConfig": map[string]interface{}{
+						"RXPower": map[string]interface{}{"_value": 23.7},
+					},
+				},
+			},
+		},
+	}
+	stats := &OpticalStats{}
+	require.True(t, extractHuaweiGpon(doc, stats))
+	assert.InDelta(t, -26.3, stats.RxPowerDBm, 0.05)
+}
+
 // --- classifyOpticalHealth pure unit tests ---
 //
 // These don't touch the network or cache — pure logic on the

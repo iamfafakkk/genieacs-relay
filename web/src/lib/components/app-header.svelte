@@ -8,7 +8,9 @@
 		'/': 'Dashboard'
 	};
 
-	const title = $derived(titles[page.url.pathname] ?? 'Admin');
+	const title = $derived(
+		page.url.pathname.startsWith('/devices/') ? 'Device' : (titles[page.url.pathname] ?? 'Admin')
+	);
 </script>
 
 <header

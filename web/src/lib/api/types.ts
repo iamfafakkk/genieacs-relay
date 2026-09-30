@@ -25,6 +25,107 @@ export interface DeviceSearchResponse {
 	device: DeviceSummary;
 }
 
+// --- Per-device inspection (mirrors handlers_inspection.go / models.go / optical.go) ---
+
+export interface DeviceStatus {
+	device_id: string;
+	ip?: string;
+	last_inform?: string;
+	last_inform_age_seconds?: number;
+	online: boolean;
+	uptime_seconds?: number;
+	manufacturer?: string;
+	model?: string;
+	software_version?: string;
+	hardware_version?: string;
+}
+
+export interface WANConnection {
+	instance: number;
+	type: string;
+	connection_status?: string;
+	external_ip?: string;
+	uptime_seconds?: number;
+	username?: string;
+	last_connection_error?: string;
+}
+
+export interface WANConnectionsResponse {
+	device_id: string;
+	ip?: string;
+	wan_connections: WANConnection[];
+}
+
+export interface OpticalStats {
+	device_id: string;
+	tx_power_dbm: number;
+	rx_power_dbm: number;
+	bias_current_ma?: number;
+	temperature_c?: number;
+	voltage_v?: number;
+	health: string;
+	source: string;
+	fetched_at?: string;
+}
+
+export interface DeviceCapability {
+	device_id?: string;
+	model?: string;
+	band_type?: string;
+	is_dual_band?: boolean;
+	description?: string;
+}
+
+export interface WLANConfig {
+	wlan: string;
+	ssid: string;
+	password?: string;
+	band: string;
+	hidden: boolean;
+	auth_mode?: string;
+	encryption?: string;
+	enabled: boolean;
+}
+
+export interface WiFiStatsRadio {
+	wlan: number;
+	ssid?: string;
+	band?: string;
+	channel?: number;
+	tx_power_percent?: number;
+}
+
+export interface WiFiStatsResponse {
+	device_id: string;
+	ip?: string;
+	radios: WiFiStatsRadio[];
+}
+
+export interface WiFiClient {
+	mac: string;
+	wlan: number;
+	ssid?: string;
+	band?: string;
+	signal_strength_dbm?: number;
+	authenticated?: boolean;
+}
+
+export interface WiFiClientsResponse {
+	device_id: string;
+	ip?: string;
+	clients: WiFiClient[];
+}
+
+export interface DHCPClient {
+	mac: string;
+	hostname: string;
+	ip: string;
+}
+
+export interface MessageResponse {
+	message: string;
+}
+
 export interface VersionResponse {
 	version: string;
 	commit: string;

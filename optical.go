@@ -71,9 +71,11 @@ const (
 	opticalSourceZTECTComEpon  = "zte_ct_com_epon"
 	opticalSourceZTECTComGpon  = "zte_ct_com_gpon"
 	opticalSourceZTEWanPon     = "zte_wan_pon_interface"
+	opticalSourceHuaweiGpon    = "huawei_gpon_interface"
 	opticalSourceHuaweiHWDbg   = "huawei_hw_debug"
 	opticalSourceRealtekEpon   = "realtek_epon"
 	opticalSourceStandardTR181 = "standard_tr181"
+	opticalSourceVendorGeneric = "vendor_generic"
 )
 
 // opticalSupplyVoltageMilliThreshold — raw SupplyVoltage values above
@@ -93,6 +95,11 @@ var opticalSubtreePathsToRefresh = []string{
 	"InternetGatewayDevice.X_CT-COM_EponInterfaceConfig",
 	"InternetGatewayDevice.X_CT-COM_GponInterfaceConfig",
 	"InternetGatewayDevice.WANDevice.1.X_ZTE-COM_WANPONInterfaceConfig",
+	// Huawei GPON ONTs (HG8245H5, HG8145V5, …) expose optics on a
+	// WANDevice child whose name carries Huawei's `Interafce` typo.
+	// refreshObject only touches the exact instance, but instance 1 is
+	// where the production fleet reports it.
+	"InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig",
 	"InternetGatewayDevice.X_HW_DEBUG.AdminTR069",
 	"InternetGatewayDevice.X_Realtek_EponInterfaceConfig",
 	"Device.Optical.Interface",
@@ -163,10 +170,12 @@ func refreshOneOpticalSubtree(ctx context.Context, deviceID, subtree string) (in
 // the CPE exposes. Returns errOpticalNotSupported (sentinel) if no
 // known tree is found.
 //
-// Detection order: ZTE CT-COM EPON → ZTE CT-COM GPON → Huawei HW_DEBUG
-// → Realtek EPON → standard TR-181. The order matches typical Indonesian
-// ISP deployment frequency (most ZTE F670L/F660 ONTs in residential
-// PON deployments).
+// Detection order: ZTE CT-COM EPON → ZTE CT-COM GPON → ZTE WAN PON →
+// Huawei GPON → Huawei HW_DEBUG → Realtek EPON → standard TR-181 →
+// generic vendor scan. The order matches typical Indonesian ISP
+// deployment frequency (most ZTE F670L/F660 ONTs in residential PON
+// deployments); the generic scan is last so known trees keep their
+// Source label.
 func getOpticalStats(ctx context.Context, deviceID string) (*OpticalStats, error) {
 	deviceData, err := getDeviceData(ctx, deviceID)
 	if err != nil {
@@ -192,6 +201,10 @@ func getOpticalStats(ctx context.Context, deviceID string) (*OpticalStats, error
 		classifyOpticalHealth(stats)
 		return stats, nil
 	}
+	if extractHuaweiGpon(deviceData, stats) {
+		classifyOpticalHealth(stats)
+		return stats, nil
+	}
 	if extractHuaweiHWDebug(deviceData, stats) {
 		classifyOpticalHealth(stats)
 		return stats, nil
@@ -201,6 +214,10 @@ func getOpticalStats(ctx context.Context, deviceID string) (*OpticalStats, error
 		return stats, nil
 	}
 	if extractStandardTR181(deviceData, stats) {
+		classifyOpticalHealth(stats)
+		return stats, nil
+	}
+	if extractVendorOptical(deviceData, stats) {
 		classifyOpticalHealth(stats)
 		return stats, nil
 	}
@@ -224,6 +241,41 @@ func extractZTECTComEpon(deviceData map[string]interface{}, stats *OpticalStats)
 	stats.BiasCurrentMA = readFloat(statsTree, "BiasCurrent")
 	stats.TemperatureC = readFloat(statsTree, "Temperature")
 	stats.VoltageV = readFloat(statsTree, "Voltage")
+	return true
+}
+
+// extractVendorOptical is the catch-all for vendor optical trees without a
+// dedicated extractor. GenieACS exposes every parameter as a flattened path
+// (device doc → IGD → WANDevice.N → <tree> → … → RxPower), and GenieACS can
+// auto-populate the RxPower/TxPower family by parameter name. So we scan the
+// tree for any leaf literally named RXPower/RxPower (and TxPower/TXPower, …)
+// instead of enumerating tree names — otherwise every new vendor spelling is
+// an OPTICAL_NOT_SUPPORTED 404 until someone adds another pinned extractor.
+//
+// Placed last in the detection chain so it only runs for trees the dedicated
+// extractors don't recognize. Source is labelled vendor_generic since the
+// exact tree name isn't tracked here.
+func extractVendorOptical(deviceData map[string]interface{}, stats *OpticalStats) bool {
+	leaf := func(names ...string) (float64, bool) {
+		return FirstLeafFloat(deviceData, names...)
+	}
+	tx, _ := leaf("TXPower", "TxPower")
+	rx, ok := leaf("RXPower", "RxPower")
+	if !ok || rx == 0 {
+		return false
+	}
+	stats.Source = opticalSourceVendorGeneric
+	stats.TxPowerDBm = tx
+	stats.RxPowerDBm = rawRxToDBm(rx)
+	if v, ok := leaf("BiasCurrent"); ok {
+		stats.BiasCurrentMA = v
+	}
+	if v, ok := leaf("TransceiverTemperature", "Temperature"); ok {
+		stats.TemperatureC = v
+	}
+	if v, ok := leaf("SupplyVoltage"); ok {
+		stats.VoltageV = normalizeSupplyVoltage(v)
+	}
 	return true
 }
 
@@ -276,6 +328,46 @@ func extractZTEWanPon(deviceData map[string]interface{}, stats *OpticalStats) bo
 	stats.BiasCurrentMA = readFloat(root, "BiasCurrent")
 	stats.TemperatureC = firstNonZeroFloat(root, "TransceiverTemperature", "Temperature")
 	stats.VoltageV = normalizeSupplyVoltage(readFloat(root, "SupplyVoltage"))
+	return true
+}
+
+// extractHuaweiGpon reads optical stats from the Huawei GPON ONT tree
+// (`InternetGatewayDevice.WANDevice.{n}.X_GponInterafceConfig` — note
+// Huawei's firmware-side `Interafce` spelling). Used by HG8245H5,
+// HG8145V5, and other HG-series GPON ONTs that expose optics as a
+// WANDevice child instead of the X_HW_DEBUG tree.
+//
+// Scans every WANDevice instance because the optics instance varies
+// (instance 2 on some firmware lines). RXPower is stored as a bare
+// number (xsd:int) and, like the ZTE WAN PON tree, may be either dBm
+// (negative) or linear µW (positive) — rawRxToDBm disambiguates by sign.
+func extractHuaweiGpon(deviceData map[string]interface{}, stats *OpticalStats) bool {
+	devices := navigateNested(deviceData, "InternetGatewayDevice", "WANDevice")
+	if devices == nil {
+		return false
+	}
+	var tree map[string]interface{}
+	for _, n := range EnumerateInstances(deviceData, "InternetGatewayDevice.WANDevice") {
+		inst, ok := devices[strconv.Itoa(n)].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, ok := inst["X_GponInterafceConfig"].(map[string]interface{}); ok {
+			tree = t
+			break
+		}
+	}
+	if tree == nil {
+		return false
+	}
+	stats.Source = opticalSourceHuaweiGpon
+	stats.TxPowerDBm = firstNonZeroFloat(tree, "TXPower", "TxPower")
+	if v := firstNonZeroFloat(tree, "RXPower", "RxPower"); v != 0 {
+		stats.RxPowerDBm = rawRxToDBm(v)
+	}
+	stats.BiasCurrentMA = firstNonZeroFloat(tree, "BiasCurrent")
+	stats.TemperatureC = firstNonZeroFloat(tree, "TransceiverTemperature", "Temperature")
+	stats.VoltageV = normalizeSupplyVoltage(firstNonZeroFloat(tree, "SupplyVoltage"))
 	return true
 }
 
