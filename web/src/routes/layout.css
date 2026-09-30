@@ -135,3 +135,21 @@
 		@apply font-sans;
 	}
 }
+
+/* Unlayered (wins over Tailwind utility `cursor-default` on components).
+   Tailwind v4 preflight also sets `cursor: default` on buttons.
+   Covers native controls plus bits-ui primitives rendered as non-button
+   elements (menu/option items, tabs, switches). */
+a[href],
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']),
+[role='menuitem'],
+[role='menuitemcheckbox'],
+[role='menuitemradio'],
+[role='option']:not([data-disabled]),
+[role='tab']:not([data-disabled]),
+[role='switch']:not([data-disabled]),
+[data-slot='select-item']:not([data-disabled]),
+[data-slot='select-trigger']:not(:disabled) {
+	cursor: pointer;
+}
