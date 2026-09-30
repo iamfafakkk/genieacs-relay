@@ -17,8 +17,7 @@
 		wifiClients,
 		wifiConnectivityRefresh,
 		wifiStats,
-		wlanConfigs,
-		updateWLAN
+		wlanConfigs
 	} from '$lib/api/device';
 	import type {
 		DeviceCapability,
@@ -36,8 +35,8 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import * as Empty from '$lib/components/ui/empty';
 	import * as Field from '$lib/components/ui/field';
-	import * as Select from '$lib/components/ui/select';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import WlanEditor from '$lib/components/wlan-editor.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -50,7 +49,6 @@
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import PowerIcon from '@lucide/svelte/icons/power';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-	import WifiIcon from '@lucide/svelte/icons/wifi';
 	import ZapIcon from '@lucide/svelte/icons/zap';
 	import ThermometerIcon from '@lucide/svelte/icons/thermometer';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
@@ -89,13 +87,12 @@
 	let pppoeUser = $state('');
 	let pppoePass = $state('');
 	let pppoeBusy = $state(false);
-	let editWlan = $state('1');
-	let editSSID = $state('');
-	let editPass = $state('');
-	let editBusy = $state(false);
 
 	const ip = $derived(summary?.ip ?? '');
 	const online = $derived(summary ? isOnline(summary) : (status?.online ?? false));
+	const wlanChannels = $derived(
+		new Map((radioStats ?? []).map((r) => [String(r.wlan), r.channel] as const))
+	);
 
 	function isOnline(d: DeviceSummary): boolean {
 		if (!d.last_inform) return false;
@@ -175,7 +172,7 @@
 			safe(() => deviceStatus(target), (v) => (status = v), (e) => (statusErr = e)),
 			safe(() => wanStatus(target), (v) => (wan = v.wan_connections), (e) => (wanErr = e)),
 			safe(() => deviceCapability(target), (v) => (capability = v), () => {}),
-			safe(() => wlanConfigs(target), (v) => (wlans = v), (e) => (wlansErr = e))
+			safe(() => wlanConfigs(target, true), (v) => (wlans = v), (e) => (wlansErr = e))
 		]);
 	}
 
@@ -228,13 +225,7 @@
 		if (ip) {
 			pppoeUser = summary?.pppoe_username ?? '';
 			await loadDetails(ip);
-			editSSID = wlans?.[0]?.ssid ?? '';
 		}
-	});
-
-	$effect(() => {
-		const w = wlans?.find((x) => x.wlan === editWlan);
-		if (w) editSSID = w.ssid;
 	});
 
 	async function refreshDHCP() {
@@ -249,7 +240,7 @@
 		if (!ip) return;
 		await runAction('WLAN refresh', async () => {
 			await wifiConnectivityRefresh(ip);
-			wlans = await wlanConfigs(ip);
+			wlans = await wlanConfigs(ip, true);
 		});
 	}
 
@@ -273,22 +264,6 @@
 			toast.error(`PPPoE update failed: ${errMessage(e)}`);
 		} finally {
 			pppoeBusy = false;
-		}
-	}
-
-	async function saveWLAN() {
-		if (!ip) return;
-		editBusy = true;
-		try {
-			const body: Record<string, unknown> = { ssid: editSSID };
-			if (editPass) body.password = editPass;
-			await updateWLAN(ip, editWlan, body);
-			toast.success(`WLAN ${editWlan} update submitted.`);
-			editPass = '';
-		} catch (e) {
-			toast.error(`WLAN update failed: ${errMessage(e)}`);
-		} finally {
-			editBusy = false;
 		}
 	}
 </script>
@@ -548,7 +523,7 @@
 				<Card.Root>
 					<Card.Header>
 						<Card.Title>WLAN slots</Card.Title>
-						<Card.Description>SSID configuration currently broadcasting on the CPE.</Card.Description>
+						<Card.Description>Slots provisioned on the CPE, whether broadcasting or not.</Card.Description>
 					</Card.Header>
 					<Card.Content>
 						{#if wlansErr}
@@ -567,10 +542,9 @@
 									<Table.Header>
 										<Table.Row>
 											<Table.Head>WLAN</Table.Head>
+											<Table.Head>Enabled</Table.Head>
 											<Table.Head>SSID</Table.Head>
 											<Table.Head>Band</Table.Head>
-											<Table.Head>Auth</Table.Head>
-											<Table.Head>Encryption</Table.Head>
 											<Table.Head>Hidden</Table.Head>
 										</Table.Row>
 									</Table.Header>
@@ -578,16 +552,42 @@
 										{#each wlans as w (w.wlan)}
 											<Table.Row>
 												<Table.Cell>{w.wlan}</Table.Cell>
+												<Table.Cell>
+													<Badge
+														variant="outline"
+														class={w.enabled ? 'border-success/50 text-success' : 'text-muted-foreground'}
+													>
+														{w.enabled ? 'yes' : 'no'}
+													</Badge>
+												</Table.Cell>
 												<Table.Cell>{w.ssid}</Table.Cell>
 												<Table.Cell>{w.band}</Table.Cell>
-												<Table.Cell>{w.auth_mode ?? '—'}</Table.Cell>
-												<Table.Cell>{w.encryption ?? '—'}</Table.Cell>
 												<Table.Cell>{w.hidden ? 'yes' : 'no'}</Table.Cell>
 											</Table.Row>
 										{/each}
 									</Table.Body>
 								</Table.Root>
 							</div>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+
+				<Card.Root>
+					<Card.Header>
+						<Card.Title>WLAN configuration</Card.Title>
+						<Card.Description>
+							Enable/disable a slot and edit its SSID, security, password, channel, and width.
+						</Card.Description>
+					</Card.Header>
+					<Card.Content class="flex flex-col gap-4">
+						{#if wlans === null}
+							<Skeleton class="h-16 w-full" />
+						{:else if wlans.length === 0}
+							{@render EmptyState({ title: 'No WLAN slots', description: 'The CPE reports no WLAN configuration to edit.' })}
+						{:else}
+							{#each wlans as w (w.wlan)}
+								<WlanEditor {ip} wlan={w} currentChannel={wlanChannels.get(w.wlan)} />
+							{/each}
 						{/if}
 					</Card.Content>
 				</Card.Root>
@@ -792,60 +792,6 @@
 										<KeyRoundIcon data-icon="inline-start" />
 									{/if}
 									Update PPPoE
-								</Button>
-							</form>
-						</Card.Content>
-					</Card.Root>
-
-					<Card.Root>
-						<Card.Header>
-							<Card.Title>WiFi settings</Card.Title>
-							<Card.Description>Change the SSID or password of a WLAN slot.</Card.Description>
-						</Card.Header>
-						<Card.Content>
-							<form
-								class="flex flex-col gap-4"
-								onsubmit={(e) => {
-									e.preventDefault();
-									saveWLAN();
-								}}
-							>
-								<Field.FieldGroup>
-									<Field.Field>
-										<Field.FieldLabel for="wlan-slot">WLAN slot</Field.FieldLabel>
-										<Select.Root type="single" bind:value={editWlan}>
-											<Select.Trigger id="wlan-slot" class="w-full">
-												<Select.Value placeholder="Select a WLAN" />
-											</Select.Trigger>
-											<Select.Content>
-												{#each wlans ?? [] as w (w.wlan)}
-													<Select.Item value={w.wlan}>{w.wlan} · {w.ssid} ({w.band})</Select.Item>
-												{/each}
-											</Select.Content>
-										</Select.Root>
-									</Field.Field>
-									<Field.Field>
-										<Field.FieldLabel for="wlan-ssid">SSID</Field.FieldLabel>
-										<Input id="wlan-ssid" bind:value={editSSID} disabled={editBusy} />
-									</Field.Field>
-									<Field.Field>
-										<Field.FieldLabel for="wlan-pass">Password</Field.FieldLabel>
-										<Input
-											id="wlan-pass"
-											type="password"
-											bind:value={editPass}
-											placeholder="Leave blank to keep current"
-											disabled={editBusy}
-										/>
-									</Field.Field>
-								</Field.FieldGroup>
-								<Button type="submit" disabled={editBusy || !editSSID.trim()}>
-									{#if editBusy}
-										<Spinner data-icon="inline-start" />
-									{:else}
-										<WifiIcon data-icon="inline-start" />
-									{/if}
-									Save WiFi settings
 								</Button>
 							</form>
 						</Card.Content>

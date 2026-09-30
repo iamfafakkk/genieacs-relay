@@ -18,7 +18,8 @@ import (
 //	@Tags			SSID
 //	@Accept			json
 //	@Produce		json
-//	@Param			ip	path		string	true	"Device IP address"	example(192.168.1.1)
+//	@Param			ip		path		string	true	"Device IP address"	example(192.168.1.1)
+//	@Param			all		query		bool	false	"Include disabled slots (default: only enabled)"
 //	@Success		200	{object}	Response{data=[]WLANConfig}
 //	@Failure		400	{object}	Response
 //	@Failure		401	{object}	Response
@@ -33,8 +34,14 @@ func getSSIDByIPHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Retrieve WLAN configuration data for the device
-	wlanData, err := getWLANData(r.Context(), deviceID)
+	// Retrieve WLAN configuration data for the device. ?all=true returns
+	// every provisioned slot (Enabled reflecting the raw tree) so callers
+	// can edit/enable disabled ones; default is enabled-only.
+	fetch := getWLANData
+	if r.URL.Query().Get("all") == "true" {
+		fetch = getAllWLANConfigs
+	}
+	wlanData, err := fetch(r.Context(), deviceID)
 	if err != nil {
 		// Log error and return 500 if WLAN data retrieval fails
 		logger.Error("Failed to get WLAN data", zap.String("deviceID", deviceID), zap.Error(err))

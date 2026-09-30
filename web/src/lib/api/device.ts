@@ -35,9 +35,11 @@ export function deviceCapability(ip: string): Promise<DeviceCapability> {
 	return api(`/api/v1/genieacs/capability/${encodeURIComponent(ip)}`);
 }
 
-/** WLAN slots currently broadcasting on the CPE. */
-export function wlanConfigs(ip: string): Promise<WLANConfig[]> {
-	return api(`/api/v1/genieacs/ssid/${encodeURIComponent(ip)}`);
+/** WLAN slots on the CPE. Default only enabled slots; `all` includes disabled ones. */
+export function wlanConfigs(ip: string, all = false): Promise<WLANConfig[]> {
+	return api(`/api/v1/genieacs/ssid/${encodeURIComponent(ip)}`, {
+		query: { all: all ? 'true' : undefined }
+	});
 }
 
 export function wifiStats(ip: string): Promise<WiFiStatsResponse> {
@@ -92,5 +94,29 @@ export function updateWLAN(
 	return api(`/api/v1/genieacs/wlan/update/${encodeURIComponent(wlan)}/${encodeURIComponent(ip)}`, {
 		method: 'PUT',
 		body: JSON.stringify(body)
+	});
+}
+
+/** Radio settings for a WLAN slot: channel/mode/bandwidth/transmit power (partial). */
+export function updateWLANRadio(
+	ip: string,
+	wlan: string,
+	body: { channel?: string; mode?: string; bandwidth?: string; transmit_power?: number }
+): Promise<MessageResponse> {
+	return api(`/api/v1/genieacs/wlan/optimize/${encodeURIComponent(wlan)}/${encodeURIComponent(ip)}`, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
+/** Toggle a WLAN slot on/off without touching its SSID or password. */
+export function setWLANEnabled(
+	ip: string,
+	wlan: string,
+	enabled: boolean
+): Promise<MessageResponse> {
+	const action = enabled ? 'enable' : 'delete';
+	return api(`/api/v1/genieacs/wlan/${action}/${encodeURIComponent(wlan)}/${encodeURIComponent(ip)}`, {
+		method: enabled ? 'PUT' : 'DELETE'
 	});
 }
