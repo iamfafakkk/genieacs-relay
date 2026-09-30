@@ -203,7 +203,7 @@ func refreshSSIDHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Submit refresh task to worker pool for asynchronous processing
-	if !taskWorkerPool.Submit(deviceID, taskTypeRefreshWLAN, nil) {
+	if _, ok := taskWorkerPool.Submit(deviceID, taskTypeRefreshWLAN, nil); !ok {
 		sendError(w, r, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, ErrWorkerPoolBusy)
 		return
 	}

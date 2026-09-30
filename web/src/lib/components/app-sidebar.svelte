@@ -2,12 +2,17 @@
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
+	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { setApiKey } from '$lib/api/client';
+	import { jobsState } from '$lib/stores/jobs.svelte';
 
-	const items = [{ title: 'Devices', url: '/', icon: GaugeIcon }];
+	const items = [
+		{ title: 'Devices', url: '/', icon: GaugeIcon },
+		{ title: 'Jobs', url: '/jobs', icon: ListChecksIcon }
+	];
 
 	function logout() {
 		setApiKey(null);
@@ -58,6 +63,9 @@
 									</a>
 								{/snippet}
 							</Sidebar.MenuButton>
+							{#if item.url === '/jobs' && jobsState.active > 0}
+								<Sidebar.MenuBadge>{jobsState.active}</Sidebar.MenuBadge>
+							{/if}
 						</Sidebar.MenuItem>
 					{/each}
 				</Sidebar.Menu>

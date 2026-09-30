@@ -200,10 +200,10 @@ func ParseJSONRequest(w http.ResponseWriter, r *http.Request, v interface{}) boo
 // full TTL. The worker clears the cache once the setParameterValues task has
 // actually been applied (see worker.go).
 func SubmitWLANUpdate(deviceID string, parameterValues [][]interface{}) error {
-	if !taskWorkerPool.Submit(deviceID, taskTypeSetParams, parameterValues) {
+	if _, ok := taskWorkerPool.Submit(deviceID, taskTypeSetParams, parameterValues); !ok {
 		return fmt.Errorf("worker pool queue full, unable to submit setParameterValues task")
 	}
-	if !taskWorkerPool.Submit(deviceID, taskTypeApplyChanges, nil) {
+	if _, ok := taskWorkerPool.Submit(deviceID, taskTypeApplyChanges, nil); !ok {
 		return fmt.Errorf("worker pool queue full, unable to submit applyChanges task")
 	}
 	return nil

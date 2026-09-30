@@ -5,7 +5,8 @@
 	import { page } from '$app/state';
 
 	const titles: Record<string, string> = {
-		'/': 'Dashboard'
+		'/': 'Dashboard',
+		'/jobs': 'Jobs'
 	};
 
 	const title = $derived(

@@ -2,8 +2,13 @@
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import AppSidebar from '$lib/components/app-sidebar.svelte';
 	import AppHeader from '$lib/components/app-header.svelte';
+	import { onMount } from 'svelte';
+	import { startJobNotifier } from '$lib/stores/jobs.svelte';
 
 	let { children } = $props();
+
+	// Poll worker jobs and raise sonner notifications globally.
+	onMount(startJobNotifier);
 </script>
 
 <Sidebar.Provider>

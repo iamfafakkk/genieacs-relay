@@ -313,6 +313,8 @@ func runServer(addr string) error {
 		// v2.2.0 — devices collection query (M4, M5)
 		r.Get("/devices", listDevicesHandler)
 		r.Get("/devices/search", searchDevicesHandler)
+		// worker job monitoring (admin panel "Jobs" page + sonner notifications)
+		r.Get("/jobs", listJobsHandler)
 		// v2.2.0 — TR-069 diagnostics (M1, M2)
 		r.Post("/diag/ping/{ip}", dispatchPingHandler)
 		r.Post("/diag/traceroute/{ip}", dispatchTraceRouteHandler)

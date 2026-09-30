@@ -22,6 +22,7 @@ type workerPool struct {
 
 // task represents a unit of work to be processed by the worker pool
 type task struct {
+	jobID    string          // Registry ID tracked by GET /jobs
 	deviceID string          // Target device identifier for the task
 	taskType string          // Type of task to execute (see taskType constants)
 	params   [][]interface{} // Parameters for parameter-setting tasks
@@ -53,6 +54,10 @@ func (wp *workerPool) worker() {
 		// Create context with timeout for each task to prevent hanging
 		ctx, cancel := context.WithTimeout(context.Background(), WorkerTaskTimeout)
 
+		if t.jobID != "" {
+			jobRegistryInstance.start(t.jobID)
+		}
+
 		var err error
 		// Execute appropriate function based on task type
 		switch t.taskType {
@@ -66,6 +71,10 @@ func (wp *workerPool) worker() {
 
 		// Release context resources
 		cancel()
+
+		if t.jobID != "" {
+			jobRegistryInstance.finish(t.jobID, err)
+		}
 
 		if err != nil {
 			// Log any errors encountered during task execution
@@ -89,16 +98,19 @@ func (wp *workerPool) worker() {
 }
 
 // Submit adds a new task to the worker pool queue for asynchronous processing.
-// Returns true if the task was queued, false if the queue is full.
-func (wp *workerPool) Submit(deviceID, taskType string, params [][]interface{}) bool {
+// It records the task in the job registry (visible via GET /jobs) and returns
+// the generated job ID plus false if the queue is full.
+func (wp *workerPool) Submit(deviceID, taskType string, params [][]interface{}) (string, bool) {
+	id := jobRegistryInstance.add(taskType, deviceID, len(params))
 	select {
-	case wp.queue <- task{deviceID, taskType, params}:
-		return true
+	case wp.queue <- task{jobID: id, deviceID: deviceID, taskType: taskType, params: params}:
+		return id, true
 	default:
 		logger.Warn("Worker pool queue full, task dropped",
 			zap.String("deviceID", deviceID),
 			zap.String("taskType", taskType),
 		)
-		return false
+		jobRegistryInstance.finish(id, errWorkerQueueFull)
+		return id, false
 	}
 }
