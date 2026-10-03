@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 )
 
 // rebootDevice triggers a TR-069 Reboot RPC against the CPE identified by
@@ -23,7 +22,7 @@ func rebootDevice(ctx context.Context, deviceID string) error {
 	// Build URL for the GenieACS task creation endpoint with
 	// connection_request enabled so the NBI blocks until the task is
 	// applied (or queued on failure).
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request", geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 
 	// TR-069 Reboot task — no parameters required.
 	payload := `{"name": "reboot"}`

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,7 +12,7 @@ import (
 // refreshWLANConfig triggers refresh of WLAN configuration data from device
 func refreshWLANConfig(ctx context.Context, deviceID string) error {
 	// Build URL for refresh task endpoint
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request", geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 	// Prepare refresh task payload
 	payload := `{"name": "refreshObject", "objectName": "InternetGatewayDevice.LANDevice.1.WLANConfiguration"}`
 	// Send POST request to trigger refresh

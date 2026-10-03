@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 )
 
 // getDHCPClients retrieves DHCP client information from device data
@@ -90,7 +89,7 @@ func getDHCPClients(ctx context.Context, deviceID string) ([]DHCPClient, error) 
 // refreshDHCP triggers a refresh of DHCP client information from the device
 func refreshDHCP(ctx context.Context, deviceID string) error {
 	// Build URL for refresh task endpoint targeting LANDevice.1
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request", geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 	// Prepare refresh task payload for LANDevice section
 	payload := `{"name": "refreshObject", "objectName": "InternetGatewayDevice.LANDevice.1"}`
 	// Send POST request to trigger DHCP data refresh

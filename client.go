@@ -55,13 +55,26 @@ type deviceIDQuery struct {
 	ID string `json:"_id"`
 }
 
-// getDeviceData retrieves device data either from cache or from GenieACS API
+// getDeviceData returns the device tree for a device.
+//
+// Reads are always fresh: the tree carries dynamic values (WAN external IP,
+// connection status, uptime) that must reflect the CPE's current state, not
+// a snapshot up to 30s old. The cache is used only as a fallback when
+// GenieACS is unreachable, so a transient NBI outage doesn't blank the UI.
 func getDeviceData(ctx context.Context, deviceID string) (map[string]interface{}, error) {
-	// First try to get data from cache to avoid API call
-	if cachedData, found := deviceCacheInstance.get(deviceID); found {
-		return cachedData, nil // Return cached data if available and fresh
+	data, err := fetchDeviceData(ctx, deviceID)
+	if err == nil {
+		deviceCacheInstance.set(deviceID, data)
+		return data, nil
 	}
+	if cachedData, found := deviceCacheInstance.get(deviceID); found {
+		return cachedData, nil
+	}
+	return nil, err
+}
 
+// fetchDeviceData retrieves the device tree from the GenieACS API.
+func fetchDeviceData(ctx context.Context, deviceID string) (map[string]interface{}, error) {
 	// Build query using proper JSON marshaling to prevent injection
 	queryStruct := deviceIDQuery{ID: deviceID}
 	queryBytes, err := jsonMarshal(queryStruct)
@@ -106,8 +119,7 @@ func getDeviceData(ctx context.Context, deviceID string) (map[string]interface{}
 	if len(result) == 0 {
 		return nil, fmt.Errorf("no device found with ID: %s", deviceID)
 	}
-	deviceData := result[0]                       // Get first (and should be only) device
-	deviceCacheInstance.set(deviceID, deviceData) // Cache the retrieved data
+	deviceData := result[0] // Get first (and should be only) device
 	return deviceData, nil
 }
 
@@ -204,7 +216,7 @@ func setParameterValues(ctx context.Context, deviceID string, parameterValues []
 	// offline) the task is simply left queued and applies on the next periodic
 	// inform — GenieACS returns 202 Accepted instead of 200 OK, and both are
 	// success per the NBI contract (checked below).
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request", geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 	// Prepare payload for setParameterValues task
 	payload := map[string]interface{}{"name": "setParameterValues", "parameterValues": parameterValues}
 	// Send POST request to set parameter values

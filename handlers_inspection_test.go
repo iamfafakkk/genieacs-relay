@@ -435,10 +435,10 @@ func TestBuildWanConnectionsResponse_UnknownAddressingType(t *testing.T) {
 						"1": map[string]interface{}{
 							"WANIPConnection": map[string]interface{}{
 								"1": map[string]interface{}{
-									"AddressingType":   map[string]interface{}{"_value": "Unknown"},
-									"ConnectionStatus": map[string]interface{}{"_value": "Connected"},
-									"ExternalIPAddress": map[string]interface{}{"_value": "192.0.2.99"},
-									"Uptime":           map[string]interface{}{"_value": float64(42)},
+									"AddressingType":      map[string]interface{}{"_value": "Unknown"},
+									"ConnectionStatus":    map[string]interface{}{"_value": "Connected"},
+									"ExternalIPAddress":   map[string]interface{}{"_value": "192.0.2.99"},
+									"Uptime":              map[string]interface{}{"_value": float64(42)},
 									"LastConnectionError": map[string]interface{}{"_value": "ICMP_TIMEOUT"},
 								},
 							},
@@ -452,6 +452,128 @@ func TestBuildWanConnectionsResponse_UnknownAddressingType(t *testing.T) {
 	require.Len(t, resp.WANConnections, 1)
 	assert.Equal(t, "dhcp", resp.WANConnections[0].Type)
 	assert.Equal(t, "ICMP_TIMEOUT", resp.WANConnections[0].LastError)
+}
+
+// Huawei collapses VLAN enable+id into X_HW_VLAN (0 = off); NAT is the
+// standard NATEnabled.
+func TestBuildWanConnectionsResponse_HuaweiVendorExtras(t *testing.T) {
+	tree := map[string]interface{}{
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANPPPConnection": map[string]interface{}{
+								"1": map[string]interface{}{
+									"ConnectionStatus": map[string]interface{}{"_value": "Connected"},
+									"NATEnabled":       map[string]interface{}{"_value": true},
+									"X_HW_VLAN":        map[string]interface{}{"_value": 90},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resp := buildWanConnectionsResponse(tree, "hw-device", "10.0.0.10")
+	require.Len(t, resp.WANConnections, 1)
+	c := resp.WANConnections[0]
+	require.NotNil(t, c.NATEnabled)
+	assert.True(t, *c.NATEnabled)
+	require.NotNil(t, c.VLANEnabled)
+	assert.True(t, *c.VLANEnabled)
+	require.NotNil(t, c.VLANID)
+	assert.Equal(t, 90, *c.VLANID)
+}
+
+// Huawei X_HW_VLAN of 0 means VLAN tagging is disabled.
+func TestBuildWanConnectionsResponse_HuaweiVLANZero(t *testing.T) {
+	tree := map[string]interface{}{
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANIPConnection": map[string]interface{}{
+								"1": map[string]interface{}{
+									"ConnectionStatus": map[string]interface{}{"_value": "Connected"},
+									"X_HW_VLAN":        map[string]interface{}{"_value": 0},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resp := buildWanConnectionsResponse(tree, "hw-device", "10.0.0.11")
+	require.Len(t, resp.WANConnections, 1)
+	c := resp.WANConnections[0]
+	require.NotNil(t, c.VLANEnabled)
+	assert.False(t, *c.VLANEnabled)
+	require.NotNil(t, c.VLANID)
+	assert.Equal(t, 0, *c.VLANID)
+}
+
+// ZTE splits VLAN into X_ZTE-COM_VLANEnable + X_ZTE-COM_VLANID.
+func TestBuildWanConnectionsResponse_ZTEVendorExtras(t *testing.T) {
+	tree := map[string]interface{}{
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANPPPConnection": map[string]interface{}{
+								"1": map[string]interface{}{
+									"ConnectionStatus":     map[string]interface{}{"_value": "Connected"},
+									"NATEnabled":           map[string]interface{}{"_value": false},
+									"X_ZTE-COM_VLANEnable": map[string]interface{}{"_value": true},
+									"X_ZTE-COM_VLANID":     map[string]interface{}{"_value": 90},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resp := buildWanConnectionsResponse(tree, "zte-device", "10.0.0.12")
+	require.Len(t, resp.WANConnections, 1)
+	c := resp.WANConnections[0]
+	require.NotNil(t, c.NATEnabled)
+	assert.False(t, *c.NATEnabled)
+	require.NotNil(t, c.VLANEnabled)
+	assert.True(t, *c.VLANEnabled)
+	require.NotNil(t, c.VLANID)
+	assert.Equal(t, 90, *c.VLANID)
+}
+
+// CPEs without the vendor extensions must leave all three nil, not zero.
+func TestBuildWanConnectionsResponse_NoVendorExtras(t *testing.T) {
+	tree := map[string]interface{}{
+		"InternetGatewayDevice": map[string]interface{}{
+			"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"WANConnectionDevice": map[string]interface{}{
+						"1": map[string]interface{}{
+							"WANPPPConnection": map[string]interface{}{
+								"1": map[string]interface{}{
+									"ConnectionStatus": map[string]interface{}{"_value": "Connected"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resp := buildWanConnectionsResponse(tree, "plain-device", "10.0.0.13")
+	require.Len(t, resp.WANConnections, 1)
+	c := resp.WANConnections[0]
+	assert.Nil(t, c.NATEnabled)
+	assert.Nil(t, c.VLANEnabled)
+	assert.Nil(t, c.VLANID)
 }
 
 // --- H7: POST /params/{ip} ---

@@ -10,6 +10,7 @@ import type {
 	DHCPClient,
 	MessageResponse,
 	OpticalStats,
+	WANConnectionMutationResponse,
 	WANConnectionsResponse,
 	WiFiClientsResponse,
 	WiFiStatsResponse,
@@ -22,6 +23,90 @@ export function deviceStatus(ip: string): Promise<DeviceStatus> {
 
 export function wanStatus(ip: string): Promise<WANConnectionsResponse> {
 	return api(`/api/v1/genieacs/wan/${encodeURIComponent(ip)}`);
+}
+
+// --- WAN connection CRUD ---
+
+export interface CreateWANConnectionBody {
+	type: 'pppoe' | 'dhcp' | 'static';
+	wan_device?: number;
+	connection_device?: number;
+	/** Operator label for the new connection. Required: GenieACS uses it to seed the new instance. */
+	name: string;
+	enabled?: boolean;
+	username?: string;
+	password?: string;
+	external_ip_address?: string;
+	subnet_mask?: string;
+	default_gateway?: string;
+	dns_servers?: string;
+}
+
+export interface UpdateWANConnectionBody {
+	enabled?: boolean;
+	username?: string;
+	password?: string;
+	addressing_type?: string;
+	external_ip_address?: string;
+	subnet_mask?: string;
+	default_gateway?: string;
+	dns_servers?: string;
+	/** Vendor extension: NAT (standard NATEnabled). */
+	nat_enabled?: boolean;
+	/** Vendor extension: VLAN tagging enable. */
+	vlan_enabled?: boolean;
+	/** Vendor extension: 802.1Q VLAN id (1-4094). */
+	vlan_id?: number;
+	/** Vendor extension: service tokens (e.g. ["INTERNET","TR069"]). */
+	service_list?: string[];
+}
+
+function wanInstancePath(
+	ip: string,
+	type: string,
+	wanDevice: number,
+	connectionDevice: number,
+	instance: number
+): string {
+	return `/api/v1/genieacs/wan/${encodeURIComponent(type)}/${wanDevice}/${connectionDevice}/${instance}/${encodeURIComponent(ip)}`;
+}
+/** Add a WAN connection. `instance` in the response is 0 when the AddObject task is queued. */
+export function createWANConnection(
+	ip: string,
+	body: CreateWANConnectionBody
+): Promise<WANConnectionMutationResponse> {
+	return api(`/api/v1/genieacs/wan/${encodeURIComponent(ip)}`, {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+/** Edit fields on an existing WAN connection instance. */
+export function updateWANConnection(
+	ip: string,
+	type: string,
+	wanDevice: number,
+	connectionDevice: number,
+	instance: number,
+	body: UpdateWANConnectionBody
+): Promise<WANConnectionMutationResponse> {
+	return api(wanInstancePath(ip, type, wanDevice, connectionDevice, instance), {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
+/** Delete a WAN connection instance. */
+export function deleteWANConnection(
+	ip: string,
+	type: string,
+	wanDevice: number,
+	connectionDevice: number,
+	instance: number
+): Promise<WANConnectionMutationResponse> {
+	return api(wanInstancePath(ip, type, wanDevice, connectionDevice, instance), {
+		method: 'DELETE'
+	});
 }
 
 /** Optical stats. The backend 404s (OPTICAL_NOT_SUPPORTED) when the CPE exposes no optical tree. */

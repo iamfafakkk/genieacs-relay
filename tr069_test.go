@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -35,6 +36,54 @@ func withMockGenieACS(t *testing.T, h http.HandlerFunc) *httptest.Server {
 		httpClient = originalClient
 	})
 	return srv
+}
+
+// --- deviceTasksURL / connection_request policy ---
+
+// TestDeviceTasksURL_AlwaysConnectionRequest locks in the project rule that
+// every task submitted to GenieACS from the UI must poke the CPE via a
+// TR-069 ConnectionRequest, so changes apply immediately rather than on the
+// next periodic inform. Do not build task URLs inline — use this helper.
+func TestDeviceTasksURL_AlwaysConnectionRequest(t *testing.T) {
+	originalBase := geniesBaseURL
+	geniesBaseURL = "http://acs.example:7557"
+	t.Cleanup(func() { geniesBaseURL = originalBase })
+
+	got := deviceTasksURL("dev/with space")
+	assert.Contains(t, got, "?connection_request")
+	assert.Equal(t, "http://acs.example:7557/devices/dev%2Fwith%20space/tasks?connection_request", got)
+}
+
+// TestNoTaskURLWithoutConnectionRequest scans the non-test source for any
+// GenieACS task-submission URL literal and fails if it omits
+// connection_request. This is the enforcement half of the project rule:
+// UI actions must wake the CPE immediately, never queue silently.
+func TestNoTaskURLWithoutConnectionRequest(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		require.NoError(t, err)
+		text := string(src)
+		for i := 0; i < len(text); {
+			idx := strings.Index(text[i:], "/tasks?")
+			if idx < 0 {
+				break
+			}
+			at := i + idx
+			// The literal must read "/tasks?connection_request".
+			assert.True(t,
+				strings.HasPrefix(text[at:], "/tasks?connection_request"),
+				"%s builds a GenieACS task URL without connection_request near %q",
+				name, text[at:min(at+40, len(text))])
+			i = at + len("/tasks?")
+		}
+	}
 }
 
 // --- factoryResetDevice ---
@@ -104,9 +153,11 @@ func TestConnectionRequest_Success(t *testing.T) {
 	withMockGenieACS(t, func(w http.ResponseWriter, r *http.Request) {
 		assert.Contains(t, r.URL.RawQuery, "connection_request")
 
+		// A pure ConnectionRequest has an EMPTY body. GenieACS uses the
+		// body's presence to decide between a bare connection request and
+		// a queued task; sending a task body would queue/block instead.
 		body := readBody(t, r)
-		assert.Contains(t, body, "getParameterValues")
-		assert.Contains(t, body, "UpTime")
+		assert.Empty(t, body)
 
 		w.WriteHeader(http.StatusOK)
 	})
@@ -256,13 +307,13 @@ func TestAddObject_Success_NumericInstance(t *testing.T) {
 	withMockGenieACS(t, func(w http.ResponseWriter, r *http.Request) {
 		body := readBody(t, r)
 		assert.Contains(t, body, `"name":"addObject"`)
-		assert.Contains(t, body, `"objectName":"InternetGatewayDevice.LANDevice.1.WLANConfiguration."`)
+		assert.Contains(t, body, `"objectName":"InternetGatewayDevice.LANDevice.1.WLANConfiguration"`)
 		w.WriteHeader(http.StatusOK)
 		// Instance number returned at parameterValues[0][1] as a JSON number
 		_, _ = w.Write([]byte(`{"parameterValues": [["instance", 5, "xsd:unsignedInt"]]}`))
 	})
 	instance, err := addObject(context.Background(), "device-001",
-		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.")
+		"InternetGatewayDevice.LANDevice.1.WLANConfiguration", nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 5, instance)
 }
@@ -272,7 +323,7 @@ func TestAddObject_Success_StringInstance(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"parameterValues": [["instance", "7", "xsd:string"]]}`))
 	})
-	instance, err := addObject(context.Background(), "device-001", "X.Y.")
+	instance, err := addObject(context.Background(), "device-001", "X.Y.", nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 7, instance)
 }
@@ -283,7 +334,7 @@ func TestAddObject_Success_QueuedNoInstance(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{}`))
 	})
-	instance, err := addObject(context.Background(), "device-001", "X.Y.")
+	instance, err := addObject(context.Background(), "device-001", "X.Y.", nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, instance)
 }
@@ -292,7 +343,7 @@ func TestAddObject_Success_EmptyBody(t *testing.T) {
 	withMockGenieACS(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	instance, err := addObject(context.Background(), "device-001", "X.Y.")
+	instance, err := addObject(context.Background(), "device-001", "X.Y.", nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, instance)
 }
@@ -302,7 +353,7 @@ func TestAddObject_HTTPError(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte("bad object name"))
 	})
-	_, err := addObject(context.Background(), "device-001", "X.Y.")
+	_, err := addObject(context.Background(), "device-001", "X.Y.", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "addObject failed")
 }
@@ -311,7 +362,7 @@ func TestAddObject_TransportFailure(t *testing.T) {
 	originalClient := httpClient
 	httpClient = &http.Client{Transport: &failingTransport{}}
 	t.Cleanup(func() { httpClient = originalClient })
-	_, err := addObject(context.Background(), "device-001", "X.Y.")
+	_, err := addObject(context.Background(), "device-001", "X.Y.", nil)
 	assert.Error(t, err)
 }
 
@@ -359,11 +410,11 @@ func TestDeleteObject_Success(t *testing.T) {
 	withMockGenieACS(t, func(w http.ResponseWriter, r *http.Request) {
 		body := readBody(t, r)
 		assert.Contains(t, body, `"name":"deleteObject"`)
-		assert.Contains(t, body, `"objectName":"InternetGatewayDevice.LANDevice.1.WLANConfiguration.5."`)
+		assert.Contains(t, body, `"objectName":"InternetGatewayDevice.LANDevice.1.WLANConfiguration.5"`)
 		w.WriteHeader(http.StatusOK)
 	})
 	err := deleteObject(context.Background(), "device-001",
-		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.5.")
+		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.5")
 	assert.NoError(t, err)
 }
 
@@ -500,7 +551,7 @@ func TestAddObject_BodyReadError(t *testing.T) {
 
 	// Body read error on the success path → returns instance 0 with
 	// no error (best-effort instance extraction).
-	instance, err := addObject(context.Background(), "device-001", "X.Y.")
+	instance, err := addObject(context.Background(), "device-001", "X.Y.", nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, instance)
 }

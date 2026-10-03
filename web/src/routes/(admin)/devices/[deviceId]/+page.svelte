@@ -37,7 +37,9 @@
 	import * as Empty from '$lib/components/ui/empty';
 	import * as Field from '$lib/components/ui/field';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import * as Sheet from '$lib/components/ui/sheet';
 	import WlanEditor from '$lib/components/wlan-editor.svelte';
+	import WANEditor from '$lib/components/wan-editor.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -47,6 +49,8 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import PowerIcon from '@lucide/svelte/icons/power';
@@ -84,11 +88,15 @@
 	let leases = $state<DHCPClient[] | null>(null);
 	let leasesErr = $state('');
 	let refreshing = $state(false);
+	let summoning = $state(false);
 
 	let activeTab = $state('overview');
 	let pppoeUser = $state('');
 	let pppoePass = $state('');
 	let pppoeBusy = $state(false);
+	// WAN connection editor (Overview tab). `editingWan` null = create mode.
+	let wanEditorOpen = $state(false);
+	let editingWan = $state<WANConnection | null>(null);
 	// Optimistic enable/disable per slot: the CPE only reflects the change
 	// on its next inform (~30s), so mirror operator intent locally instead
 	// of showing a stale re-fetch.
@@ -133,6 +141,11 @@
 
 	function formatDBm(v?: number): string {
 		return typeof v === 'number' && v !== 0 ? `${v.toFixed(2)} dBm` : '—';
+	}
+
+	/** Render a tri-state vendor flag; undefined (not exposed) shows as "—". */
+	function fmtBool(v?: boolean): string {
+		return v === undefined ? '—' : v ? 'Yes' : 'No';
 	}
 
 	function healthClass(health: string): string {
@@ -258,6 +271,21 @@
 		});
 	}
 
+	function openWanCreate() {
+		editingWan = null;
+		wanEditorOpen = true;
+	}
+
+	function openWanEdit(conn: WANConnection) {
+		editingWan = conn;
+		wanEditorOpen = true;
+	}
+
+	async function reloadWan() {
+		if (!ip) return;
+		await safe(() => wanStatus(ip), (v) => (wan = v.wan_connections), (e) => (wanErr = e));
+	}
+
 	async function toggleWlan(w: WLANConfig, next: boolean) {
 		if (!ip) return;
 		wlanToggling = { ...wlanToggling, [w.wlan]: true };
@@ -280,6 +308,27 @@
 			toast.success(`${label} submitted.`);
 		} catch (e) {
 			toast.error(`${label} failed: ${errMessage(e)}`);
+		}
+	}
+
+	// Send a bare TR-069 ConnectionRequest to wake the CPE, then re-read.
+	// The wake is fire-and-forget; the device dials in within 1-30s, so an
+	// immediate re-read may still show the pre-wake state.
+	async function summon() {
+		if (!ip) return;
+		summoning = true;
+		try {
+			await wakeDevice(ip);
+			toast.success('Connection request sent. Reloading once the device dials in…');
+			// Give the CPE a moment to open its CWMP session; an immediate
+			// read would still show the pre-wake snapshot.
+			await new Promise((r) => setTimeout(r, 6000));
+			await loadSummary();
+			if (ip) await loadDetails(ip);
+		} catch (e) {
+			toast.error(`Summon failed: ${errMessage(e)}`);
+		} finally {
+			summoning = false;
 		}
 	}
 
@@ -322,6 +371,14 @@
 					{summary.ip}
 				</Badge>
 			{/if}
+			<Button variant="outline" size="sm" onclick={summon} disabled={summoning || summaryLoading || !ip}>
+				{#if summoning}
+					<Spinner data-icon="inline-start" />
+				{:else}
+					<ZapIcon data-icon="inline-start" />
+				{/if}
+				Summon
+			</Button>
 			<Button variant="outline" size="sm" onclick={refreshAll} disabled={refreshing || summaryLoading}>
 				{#if refreshing}
 					<Spinner data-icon="inline-start" />
@@ -423,8 +480,16 @@
 
 				<Card.Root>
 					<Card.Header>
-						<Card.Title>WAN connections</Card.Title>
-						<Card.Description>Every PPP and IP connection instance on the CPE.</Card.Description>
+						<div class="flex flex-wrap items-center justify-between gap-2">
+							<div>
+								<Card.Title>WAN connections</Card.Title>
+								<Card.Description>Every PPP and IP connection instance on the CPE.</Card.Description>
+							</div>
+							<Button variant="outline" size="sm" onclick={openWanCreate} disabled={!ip}>
+								<PlusIcon data-icon="inline-start" />
+								Add WAN connection
+							</Button>
+						</div>
 					</Card.Header>
 					<Card.Content>
 						{#if wanErr}
@@ -442,18 +507,25 @@
 								<Table.Root>
 									<Table.Header>
 										<Table.Row>
+											<Table.Head>Name</Table.Head>
 											<Table.Head>Instance</Table.Head>
 											<Table.Head>Type</Table.Head>
 											<Table.Head>Status</Table.Head>
+											<Table.Head>NAT</Table.Head>
+											<Table.Head>VLAN enable</Table.Head>
+											<Table.Head>VLAN ID</Table.Head>
+											<Table.Head>Services</Table.Head>
 											<Table.Head>External IP</Table.Head>
 											<Table.Head>Uptime</Table.Head>
 											<Table.Head>Username</Table.Head>
 											<Table.Head>Last error</Table.Head>
+											<Table.Head class="text-right">Actions</Table.Head>
 										</Table.Row>
 									</Table.Header>
 									<Table.Body>
 										{#each wan as conn, i (i)}
 											<Table.Row>
+												<Table.Cell class="font-medium">{conn.name || '—'}</Table.Cell>
 												<Table.Cell>{conn.instance}</Table.Cell>
 												<Table.Cell>{conn.type}</Table.Cell>
 												<Table.Cell>
@@ -464,13 +536,27 @@
 															: 'text-muted-foreground'}>{conn.connection_status ?? 'unknown'}</Badge
 													>
 												</Table.Cell>
-												<Table.Cell class="font-mono text-xs">{conn.external_ip || '—'}</Table.Cell>
+												<Table.Cell>{fmtBool(conn.nat_enabled)}</Table.Cell>
+												<Table.Cell>{fmtBool(conn.vlan_enabled)}</Table.Cell>
+												<Table.Cell>{conn.vlan_id ?? '—'}</Table.Cell>
+												<Table.Cell class="text-xs">{conn.service_list || '—'}</Table.Cell>
+											<Table.Cell class="font-mono text-xs">{conn.external_ip || '—'}</Table.Cell>
 												<Table.Cell>{formatUptime(conn.uptime_seconds)}</Table.Cell>
 												<Table.Cell class="font-mono text-xs">{conn.username || '—'}</Table.Cell>
 												<Table.Cell class="text-muted-foreground text-xs">
 													{conn.last_connection_error && conn.last_connection_error !== 'ERROR_NONE'
 														? conn.last_connection_error
 														: '—'}
+												</Table.Cell>
+												<Table.Cell class="text-right">
+													<Button
+														variant="ghost"
+														size="icon-sm"
+														aria-label={`Edit WAN ${conn.type} instance ${conn.instance}`}
+														onclick={() => openWanEdit(conn)}
+													>
+														<PencilIcon />
+													</Button>
 												</Table.Cell>
 											</Table.Row>
 										{/each}
@@ -856,6 +942,32 @@
 		</Tabs.Root>
 	{/if}
 </div>
+
+<Sheet.Root bind:open={wanEditorOpen}>
+	<Sheet.Content side="right" class="w-full overflow-y-auto sm:max-w-md">
+		<Sheet.Header>
+			<Sheet.Title>{editingWan ? 'Edit WAN connection' : 'Add WAN connection'}</Sheet.Title>
+			<Sheet.Description>
+				{editingWan
+					? 'Update this connection via TR-069. Changes land within ~30s.'
+					: 'Create a new WAN connection instance on the CPE.'}
+			</Sheet.Description>
+		</Sheet.Header>
+		<div class="px-4 pb-4">
+			{#if wanEditorOpen}
+				<WANEditor
+					{ip}
+					conn={editingWan}
+					existing={wan ?? []}
+					ondone={async () => {
+						wanEditorOpen = false;
+						await reloadWan();
+					}}
+				/>
+			{/if}
+		</div>
+	</Sheet.Content>
+</Sheet.Root>
 
 {#snippet EmptyState(props: { title: string; description: string })}
 	<Empty.Root>

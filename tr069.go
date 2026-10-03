@@ -10,6 +10,18 @@ import (
 	"strings"
 )
 
+// deviceTasksURL builds the GenieACS NBI task-submission URL for a device.
+// It ALWAYS enables ?connection_request: every task this relay submits must
+// poke the CPE via a TR-069 ConnectionRequest so the change applies
+// immediately instead of waiting for the next periodic inform. Do not build
+// this URL inline anywhere else — call this helper so the flag can't be
+// dropped by accident. (Read-only NBI queries are plain GETs and don't use
+// this; only task submissions do.)
+func deviceTasksURL(deviceID string) string {
+	return fmt.Sprintf("%s/devices/%s/tasks?connection_request",
+		geniesBaseURL, url.PathEscape(deviceID))
+}
+
 // tr069.go contains generic TR-069 RPC dispatcher helpers used by the
 // v2.2.0 endpoint family. Each helper wraps a single GenieACS NBI task
 // submission (`POST /devices/{id}/tasks?connection_request`) with the
@@ -40,8 +52,7 @@ import (
 // device cache after a successful reset since the post-reset device
 // tree will look entirely different.
 func factoryResetDevice(ctx context.Context, deviceID string) error {
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request",
-		geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 
 	payload := `{"name": "factoryReset"}`
 
@@ -77,17 +88,28 @@ func factoryResetDevice(ctx context.Context, deviceID string) error {
 // network conditions and CWMP timer config. We do NOT block waiting
 // for the device to actually wake up — callers needing post-wake
 // confirmation should follow up with a status query workflow.
+// connectionRequest fires a TR-069 ConnectionRequest against the CPE,
+// asking it to open a CWMP session immediately. This is the "summon"
+// action: a bare ConnectionRequest UDP poke with no queued task.
+//
+// GenieACS distinguishes the two by the request body: POST to
+// /devices/{id}/tasks?connection_request with NO body performs a pure
+// connectionRequest() (200, nothing queued), whereas sending a task body
+// also inserts that task and blocks until the session completes. We want
+// the former.
+//
+// The wake itself is fire-and-forget from the caller's perspective:
+// the underlying TR-069 ConnectionRequest is a UDP poke that triggers
+// the device to open a session within 1-30 seconds depending on its
+// network conditions and CWMP timer config. We do NOT block waiting
+// for the device to actually wake up — callers needing post-wake
+// confirmation should follow up with a status query workflow.
 func connectionRequest(ctx context.Context, deviceID string) error {
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request",
-		geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 
-	// Cheapest no-op task: ask for a parameter that is always present.
-	// `_lastInform` exists on every device record, so the CPE only has
-	// to read a single timestamp from its own cache and ack — no real
-	// CWMP work happens, but the connection request still fires.
-	payload := `{"name": "getParameterValues", "parameterNames": ["InternetGatewayDevice.DeviceInfo.UpTime"]}`
-
-	resp, err := postJSONRequest(ctx, urlQ, payload)
+	// Empty body → GenieACS's pure-connectionRequest branch. Sending a
+	// task body would instead queue that task and block for the session.
+	resp, err := postJSONRequest(ctx, urlQ, "")
 	if err != nil {
 		return fmt.Errorf("connectionRequest: %w", err)
 	}
@@ -118,8 +140,7 @@ func connectionRequest(ctx context.Context, deviceID string) error {
 // The cached mode of /params just walks the existing device tree
 // without going through this helper at all.
 func getParameterValuesLive(ctx context.Context, deviceID string, paths []string) error {
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request",
-		geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 
 	// json.Marshal on a struct with only string + []string fields
 	// cannot fail (no channels, functions, or unsupported types), so
@@ -195,8 +216,7 @@ type DownloadRequest struct {
 // task is queued on the GenieACS NBI side and the device picks it
 // up on its next inform (or immediately via the connection request).
 func downloadFile(ctx context.Context, deviceID string, req DownloadRequest) (string, error) {
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request",
-		geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 
 	// Build the GenieACS task body. Field names follow GenieACS NBI
 	// convention (camelCase fileType/fileSize) which differs from the
@@ -267,26 +287,35 @@ func downloadFile(ctx context.Context, deviceID string, req DownloadRequest) (st
 }
 
 // addObject submits a TR-069 AddObject RPC task. Returns the new
-// instance number on success. Used for creating new
-// PortMapping / DHCPStaticAddress / WLANConfiguration entries.
+// instance number on success (best-effort; GenieACS does not report the
+// instance, so this is 0 in practice). Used for creating new
+// WANConnectionDevice / WANPPPConnection / WANIPConnection entries.
 //
-// The instance number returned by GenieACS lives at the
-// `parameterValues[0][1]` position of the response body when the task
-// is applied synchronously; when queued, it's only available after
-// the device informs back. v2.2.0 returns 0 in the queued case and
-// callers can re-read the device tree to discover the new instance.
-func addObject(ctx context.Context, deviceID, objectName string) (int, error) {
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request",
-		geniesBaseURL, url.PathEscape(deviceID))
+// objectName is the bare table path with NO trailing dot (e.g.
+// `InternetGatewayDevice.LANDevice.1.WLANConfiguration`). GenieACS builds
+// the internal alias as `${objectName}.[${alias}]`, so a trailing dot
+// inserts an empty segment and Path.parse rejects the task with "Invalid
+// parameter path". See genieacs lib/cwmp.ts case "addObject".
+//
+// parameterValues are the alias attributes that seed the new instance and
+// identify its parent path. They use leaf names relative to objectName
+// (e.g. [["Name","WAN1"],["Enable",false]]) — NOT fully-qualified paths.
+// A unique Name should always be present: it is what discriminates the new
+// instance from existing siblings on the CPE. Pass nil for a plain add.
+func addObject(ctx context.Context, deviceID, objectName string, parameterValues [][]interface{}) (int, error) {
+	urlQ := deviceTasksURL(deviceID)
 
 	type addObjectTask struct {
-		Name       string `json:"name"`
-		ObjectName string `json:"objectName"`
+		Name            string          `json:"name"`
+		ObjectName      string          `json:"objectName"`
+		ParameterValues [][]interface{} `json:"parameterValues,omitempty"`
 	}
-	// Marshal cannot fail on a struct of only string fields.
+	// Marshal can only fail on unsupported types; parameterValues come from
+	// our own builders of string/bool values, so the error is dropped.
 	payloadBytes, _ := json.Marshal(addObjectTask{
-		Name:       "addObject",
-		ObjectName: objectName,
+		Name:            "addObject",
+		ObjectName:      objectName,
+		ParameterValues: parameterValues,
 	})
 
 	resp, err := postJSONRequest(ctx, urlQ, string(payloadBytes))
@@ -352,12 +381,14 @@ func parseAddObjectInstance(body []byte) int {
 }
 
 // deleteObject submits a TR-069 DeleteObject RPC task. The objectName
-// must be a fully-qualified instance path (e.g.
-// `InternetGatewayDevice.LANDevice.1.WLANConfiguration.5.`). Used for
-// removing PortMapping / DHCPStaticAddress / WLANConfiguration entries.
+// is a fully-qualified instance path with NO trailing dot (e.g.
+// `InternetGatewayDevice.LANDevice.1.WLANConfiguration.5`). GenieACS
+// parses this path directly, so a trailing dot leaves an empty segment
+// and is rejected with "Invalid parameter path". See genieacs
+// docs/api-reference.rst deleteObject example. Used for removing
+// PortMapping / DHCPStaticAddress / WLANConfiguration entries.
 func deleteObject(ctx context.Context, deviceID, objectName string) error {
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request",
-		geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 
 	type delObjectTask struct {
 		Name       string `json:"name"`

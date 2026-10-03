@@ -196,6 +196,18 @@ func (r *jobRegistry) currentVersion() uint64 {
 	return r.version
 }
 
+// recordSyncJob records an already-completed synchronous operation in the
+// registry so it appears in GET /jobs next to worker-pool jobs. The work
+// has already happened by the time this is called, so the job is created
+// and immediately finished (queued -> running -> success/failed) in one
+// shot. Returns the job ID.
+func recordSyncJob(jobType, deviceID string, paramCount int, err error) string {
+	id := jobRegistryInstance.add(jobType, deviceID, paramCount)
+	jobRegistryInstance.start(id)
+	jobRegistryInstance.finish(id, err)
+	return id
+}
+
 // JobListResponse is the GET /api/v1/genieacs/jobs payload.
 //
 // @Description Current in-memory worker jobs, newest first.

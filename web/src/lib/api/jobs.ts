@@ -49,6 +49,12 @@ export function jobLabel(type: string): string {
 			return 'Committing changes';
 		case 'refreshWLAN':
 			return 'Refreshing WLAN';
+		case 'wanAdd':
+			return 'Adding WAN connection';
+		case 'wanUpdate':
+			return 'Editing WAN connection';
+		case 'wanDelete':
+			return 'Deleting WAN connection';
 		default:
 			return type;
 	}

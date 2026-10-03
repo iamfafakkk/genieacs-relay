@@ -41,19 +41,45 @@ export interface DeviceStatus {
 }
 
 export interface WANConnection {
+	wan_device: number;
+	connection_device: number;
 	instance: number;
 	type: string;
+	/** Operator-assigned connection name (TR-069 Name). Absent if the CPE hides it. */
+	name?: string;
 	connection_status?: string;
 	external_ip?: string;
 	uptime_seconds?: number;
 	username?: string;
 	last_connection_error?: string;
+	/** Current Enable state; absent when the CPE does not expose it. */
+	enabled?: boolean;
+	/** NAT enabled (TR-098 NATEnabled). Absent if not exposed. */
+	nat_enabled?: boolean;
+	/** VLAN tagging enabled (vendor X_ param). Absent if not exposed. */
+	vlan_enabled?: boolean;
+	/** 802.1Q VLAN id (vendor X_ param). Absent if not exposed. */
+	vlan_id?: number;
+	/** Vendor service-list string as reported by the CPE (e.g. "INTERNET_TR069" or "TR069,INTERNET"). Absent if not exposed. */
+	service_list?: string;
+	/** True when the CPE accepts only one service tag (Huawei). Absent if no service list is exposed. */
+	service_list_single?: boolean;
 }
 
 export interface WANConnectionsResponse {
 	device_id: string;
 	ip?: string;
 	wan_connections: WANConnection[];
+}
+
+export interface WANConnectionMutationResponse {
+	message: string;
+	device_id: string;
+	ip?: string;
+	type: string;
+	wan_device: number;
+	connection_device: number;
+	instance: number;
 }
 
 export interface OpticalStats {

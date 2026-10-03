@@ -170,13 +170,34 @@ func lookupFirstString(tree map[string]interface{}, paths ...string) (string, bo
 //
 // @Description One WAN connection's state — type (pppoe/dhcp/static), connection status, external IP, uptime, optional username (PPPoE only).
 type WANConnectionInfo struct {
+	// WANDevice and ConnectionDevice are the parent object instance
+	// numbers. Read-side flattening hides them, but WAN CRUD needs the
+	// full (WANDevice, WANConnectionDevice, connection) coordinate to
+	// address the right instance on multi-WAN CPVs.
+	WANDevice        int    `json:"wan_device" example:"1"`
+	ConnectionDevice int    `json:"connection_device" example:"1"`
 	Instance         int    `json:"instance" example:"1"`
 	Type             string `json:"type" example:"pppoe"`
+	Name             string `json:"name,omitempty" example:"3_INTERNET_R_VID_90"`
 	ConnectionStatus string `json:"connection_status" example:"Connected"`
 	ExternalIP       string `json:"external_ip,omitempty" example:"203.0.113.45"`
 	UptimeSeconds    int    `json:"uptime_seconds,omitempty" example:"12345"`
 	Username         string `json:"username,omitempty" example:"pppoe-customer-001"`
 	LastError        string `json:"last_connection_error,omitempty" example:""`
+	Enabled          *bool  `json:"enabled,omitempty" example:"true"`
+	// NAT and VLAN are vendor extensions (Huawei X_HW_*, ZTE X_ZTE-COM_*)
+	// surfaced read-only; absent when the CPE does not expose them.
+	NATEnabled  *bool `json:"nat_enabled,omitempty" example:"true"`
+	VLANEnabled *bool `json:"vlan_enabled,omitempty" example:"true"`
+	VLANID      *int  `json:"vlan_id,omitempty" example:"90"`
+	// ServiceList is the vendor service tag(s) carried on this WAN
+	// connection (e.g. INTERNET, TR069). Raw CPE value, token order,
+	// casing and separator preserved. Absent if the CPE exposes no
+	// service-list parameter.
+	ServiceList *string `json:"service_list,omitempty" example:"INTERNET_TR069"`
+	// ServiceListSingle is true when the CPE accepts only one service tag
+	// (Huawei X_HW_SERVICELIST). Absent when no service list is exposed.
+	ServiceListSingle *bool `json:"service_list_single,omitempty" example:"true"`
 }
 
 // WANConnectionsResponse is the shape returned by GET /wan/{ip}.
@@ -243,24 +264,67 @@ func buildWanConnectionsResponse(tree map[string]interface{}, deviceID, ip strin
 			pppParent := joinPath(wcdParent, wcd, "WANPPPConnection")
 			for _, ppp := range EnumerateInstances(tree, pppParent) {
 				resp.WANConnections = append(resp.WANConnections,
-					extractPPPConnection(tree, joinInstance(pppParent, ppp), ppp))
+					extractPPPConnection(tree, joinInstance(pppParent, ppp), wd, wcd, ppp))
 			}
 			ipParent := joinPath(wcdParent, wcd, "WANIPConnection")
 			for _, ipi := range EnumerateInstances(tree, ipParent) {
 				resp.WANConnections = append(resp.WANConnections,
-					extractIPConnection(tree, joinInstance(ipParent, ipi), ipi))
+					extractIPConnection(tree, joinInstance(ipParent, ipi), wd, wcd, ipi))
 			}
 		}
 	}
 	return resp
 }
 
+// applyWANNetworkExtras fills the vendor-extension NAT/VLAN fields on
+// info. There is no TR-098 standard for these; Huawei and ZTE each expose
+// their own X_ params. Huawei collapses VLAN enable+id into a single
+// X_HW_VLAN (0 = disabled); ZTE splits them into X_ZTE-COM_VLANEnable +
+// _VLANID. Fields stay nil when the CPE does not expose them.
+func applyWANNetworkExtras(tree map[string]interface{}, base string, info *WANConnectionInfo) {
+	if v, ok := LookupBool(tree, base+".NATEnabled"); ok {
+		info.NATEnabled = &v
+	}
+	if v, ok := LookupBool(tree, base+".X_HW_VLANEnable"); ok {
+		info.VLANEnabled = &v
+	}
+	if id, ok := LookupInt(tree, base+".X_HW_VLAN"); ok {
+		info.VLANID = &id
+		if info.VLANEnabled == nil {
+			enabled := id > 0
+			info.VLANEnabled = &enabled
+		}
+	}
+	if id, ok := LookupInt(tree, base+".X_ZTE-COM_VLANID"); ok {
+		info.VLANID = &id
+	}
+	if v, ok := LookupBool(tree, base+".X_ZTE-COM_VLANEnable"); ok {
+		info.VLANEnabled = &v
+	}
+	// Distinguish "CPE has no service-list param" (absent) from "param
+	// exists but is empty" (ServiceList = "") so the UI can offer editing.
+	if leaf := resolveServiceListParam(tree, base); leaf != "" {
+		s, _ := LookupString(tree, joinParam(base, leaf))
+		info.ServiceList = &s
+		single := leaf == ParamHuaweiServiceList
+		info.ServiceListSingle = &single
+	}
+}
+
 // extractPPPConnection pulls one WANPPPConnection instance into a
 // WANConnectionInfo struct. Marked as type=pppoe.
-func extractPPPConnection(tree map[string]interface{}, base string, instance int) WANConnectionInfo {
-	info := WANConnectionInfo{Instance: instance, Type: "pppoe"}
+func extractPPPConnection(tree map[string]interface{}, base string, wanDevice, connectionDevice, instance int) WANConnectionInfo {
+	info := WANConnectionInfo{
+		WANDevice:        wanDevice,
+		ConnectionDevice: connectionDevice,
+		Instance:         instance,
+		Type:             "pppoe",
+	}
 	if v, ok := LookupString(tree, base+".ConnectionStatus"); ok {
 		info.ConnectionStatus = v
+	}
+	if v, ok := LookupString(tree, base+".Name"); ok {
+		info.Name = v
 	}
 	if v, ok := LookupString(tree, base+".ExternalIPAddress"); ok {
 		info.ExternalIP = v
@@ -274,14 +338,23 @@ func extractPPPConnection(tree map[string]interface{}, base string, instance int
 	if v, ok := LookupString(tree, base+".LastConnectionError"); ok {
 		info.LastError = v
 	}
+	if v, ok := LookupBool(tree, base+".Enable"); ok {
+		info.Enabled = &v
+	}
+	applyWANNetworkExtras(tree, base, &info)
 	return info
 }
 
 // extractIPConnection pulls one WANIPConnection instance into a
 // WANConnectionInfo struct. Type is "dhcp" or "static" depending on
 // the AddressingType parameter when present.
-func extractIPConnection(tree map[string]interface{}, base string, instance int) WANConnectionInfo {
-	info := WANConnectionInfo{Instance: instance, Type: "dhcp"}
+func extractIPConnection(tree map[string]interface{}, base string, wanDevice, connectionDevice, instance int) WANConnectionInfo {
+	info := WANConnectionInfo{
+		WANDevice:        wanDevice,
+		ConnectionDevice: connectionDevice,
+		Instance:         instance,
+		Type:             "dhcp",
+	}
 	if v, ok := LookupString(tree, base+".AddressingType"); ok {
 		// Common AddressingType values: "DHCP", "Static", "IPCP".
 		// Lowercase for the API contract.
@@ -297,6 +370,9 @@ func extractIPConnection(tree map[string]interface{}, base string, instance int)
 	if v, ok := LookupString(tree, base+".ConnectionStatus"); ok {
 		info.ConnectionStatus = v
 	}
+	if v, ok := LookupString(tree, base+".Name"); ok {
+		info.Name = v
+	}
 	if v, ok := LookupString(tree, base+".ExternalIPAddress"); ok {
 		info.ExternalIP = v
 	}
@@ -306,6 +382,10 @@ func extractIPConnection(tree map[string]interface{}, base string, instance int)
 	if v, ok := LookupString(tree, base+".LastConnectionError"); ok {
 		info.LastError = v
 	}
+	if v, ok := LookupBool(tree, base+".Enable"); ok {
+		info.Enabled = &v
+	}
+	applyWANNetworkExtras(tree, base, &info)
 	return info
 }
 

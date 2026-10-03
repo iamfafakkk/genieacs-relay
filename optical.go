@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -155,7 +154,7 @@ func refreshOneOpticalSubtree(ctx context.Context, deviceID, subtree string) (in
 	// for vendor-specific optical paths. Normalize defensively here so
 	// a typo in opticalSubtreePathsToRefresh can't poison the task queue.
 	subtree = strings.TrimRight(subtree, ".")
-	urlQ := fmt.Sprintf("%s/devices/%s/tasks?connection_request", geniesBaseURL, url.PathEscape(deviceID))
+	urlQ := deviceTasksURL(deviceID)
 	payload := fmt.Sprintf(`{"name": "refreshObject", "objectName": %q}`, subtree)
 	resp, err := postJSONRequest(ctx, urlQ, payload)
 	if err != nil {

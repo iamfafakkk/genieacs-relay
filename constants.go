@@ -7,6 +7,12 @@ const (
 	TaskTypeSetParams    = "setParameterValues"
 	TaskTypeApplyChanges = "applyChanges"
 	TaskTypeRefreshWLAN  = "refreshWLAN"
+	// WAN CRUD runs synchronously (connection_request) rather than through
+	// the worker pool, but is still recorded in the job registry so it
+	// appears alongside queued tasks in GET /jobs.
+	TaskTypeWANAdd    = "wanAdd"
+	TaskTypeWANUpdate = "wanUpdate"
+	TaskTypeWANDelete = "wanDelete"
 )
 
 // GenieACS parameter paths
@@ -183,6 +189,11 @@ const (
 	AuditEventWLANEnable   = "WLAN_ENABLE"
 	AuditEventWLANOptimize = "WLAN_OPTIMIZE"
 	AuditEventCacheClear   = "CACHE_CLEAR"
+
+	// v2.3.0 — WAN connection CRUD
+	AuditEventWANCreate = "WAN_CREATE"
+	AuditEventWANUpdate = "WAN_UPDATE"
+	AuditEventWANDelete = "WAN_DELETE"
 )
 
 // Retry configurations for force handler
@@ -311,6 +322,20 @@ const (
 	ErrPPPoEInvalidWanInstance = "wan_instance must be between 1 and 8"
 	ErrPPPoEDispatchFailed     = "Failed to dispatch PPPoE credential update task"
 
+	// v2.3.0 — WAN connection CRUD
+	ErrWANInvalidType        = "type must be one of pppoe, dhcp, or static"
+	ErrWANInvalidCoordinate  = "wan_device, connection_device, and instance must each be between 1 and 8"
+	ErrWANInvalidIP          = "external_ip_address, subnet_mask, and default_gateway must be valid IP addresses"
+	ErrWANInvalidAddressing  = "addressing_type must be dhcp, static, or ipcp"
+	ErrWANFieldWrongType     = "username and password are only valid on pppoe connections"
+	ErrWANInvalidName        = "name is required and must be 1-64 characters"
+	ErrWANInvalidVLANID      = "vlan_id must be between 1 and 4094"
+	ErrWANServiceListTooLong = "service_list must be at most 128 characters"
+	ErrWANInvalidServiceList = "service_list tokens must be 1-32 letters, digits, or hyphens"
+	ErrWANCreateFailed       = "Failed to create WAN connection instance (AddObject)"
+	ErrWANDeleteFailed       = "Failed to delete WAN connection instance (DeleteObject)"
+	ErrWANDispatchFailed     = "Failed to dispatch WAN connection update task"
+
 	// v2.2.0 — firmware upgrade
 	ErrFirmwareURLRequired       = "file_url is required"
 	ErrFirmwareFileSizeNegative  = "file_size must not be negative"
@@ -416,6 +441,9 @@ const (
 	MsgFactoryResetSubmitted = "FactoryReset task submitted. Device will be unreachable for 60-180 seconds, will lose its current PPPoE credentials and WLAN config, and will rejoin the ACS in a fresh provisioning state."
 	MsgWakeDispatched        = "ConnectionRequest dispatched to device. Wake-up takes 1-30 seconds depending on CPE responsiveness."
 	MsgPPPoEUpdated          = "PPPoE credentials updated. Device will reconnect within 30s."
+	MsgWANConnectionCreated  = "WAN connection created and applied via connection request."
+	MsgWANConnectionUpdated  = "WAN connection updated via connection request."
+	MsgWANConnectionDeleted  = "WAN connection deleted. The customer link drops until a new connection is provisioned."
 	MsgFirmwareDispatched    = "Firmware download dispatched. Use the returned task_id to poll status. Typical duration 60-300 seconds."
 	MsgQoSUpdated            = "QoS rate-limit update dispatched. Device will apply new rates within 30s."
 	MsgBridgeModeUpdated     = "Bridge mode toggle dispatched. Device will reconfigure WAN within 30s."
@@ -442,6 +470,29 @@ const (
 	XSDString      = "xsd:string"
 	XSDBoolean     = "xsd:boolean"
 	XSDUnsignedInt = "xsd:unsignedInt"
+
+	// Vendor TR-069 parameter leaf names for WAN NAT/VLAN extensions. No
+	// TR-098 standard covers these; Huawei and ZTE disagree on shape.
+	ParamNATEnabled    = "NATEnabled"
+	ParamHuaweiVLAN    = "X_HW_VLAN"
+	ParamZTEVLANEnable = "X_ZTE-COM_VLANEnable"
+	ParamZTEVLANID     = "X_ZTE-COM_VLANID"
+	// VLAN id validity range (802.1Q).
+	MinVLANID = 1
+	MaxVLANID = 4094
+
+	// Vendor TR-069 leaf names for the WAN service list. Huawei and ZTE
+	// expose the same concept (a list of service tokens) under different
+	// names; the first that exists on the CPE wins. Huawei uses '_' as the
+	// token separator, everyone else ','. Tokens are not normalized — the
+	// device's own value is read back so its casing/separator is preserved.
+	ParamHuaweiServiceList = "X_HW_SERVICELIST"
+	ParamZTEServiceList    = "X_ZTE-COM_ServiceList"
+	ParamCMCCServiceList   = "X_CMCC_ServiceList"
+	ParamCTServiceList     = "X_CT-COM_ServiceList"
+	ParamCUServiceList     = "X_CU_ServiceList"
+	// MaxServiceListLength bounds the service-list string written to the CPE.
+	MaxServiceListLength = 128
 )
 
 // WLAN configuration parameter paths (TR-069)

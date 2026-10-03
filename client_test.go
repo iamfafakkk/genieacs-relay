@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -154,6 +155,42 @@ func TestGetDeviceData_Success(t *testing.T) {
 	data, err := getDeviceData(ctx, mockDeviceID)
 	assert.NoError(t, err)
 	assert.NotNil(t, data)
+}
+
+// TestGetDeviceData_AlwaysFresh guards the policy that dynamic values must
+// never be served from a stale cache: two reads in a row must both hit
+// GenieACS, so a changed ExternalIPAddress is reflected immediately.
+func TestGetDeviceData_AlwaysFresh(t *testing.T) {
+	ctx := context.Background()
+	deviceCacheInstance.clearAll()
+
+	call := 0
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		w.WriteHeader(http.StatusOK)
+		ip := "10.0.0.1"
+		if call > 1 {
+			ip = "10.0.0.2"
+		}
+		_, _ = w.Write([]byte(fmt.Sprintf(
+			`[{"InternetGatewayDevice":{"WANDevice":{"1":{"WANConnectionDevice":{"1":{"WANIPConnection":{"1":{"ExternalIPAddress":{"_value":%q}}}}}}}}}]`,
+			ip)))
+	}))
+	defer mockServer.Close()
+	geniesBaseURL = mockServer.URL
+
+	first, err := getDeviceData(ctx, mockDeviceID)
+	require.NoError(t, err)
+	second, err := getDeviceData(ctx, mockDeviceID)
+	require.NoError(t, err)
+
+	ipOf := func(tree map[string]interface{}) string {
+		v, _ := LookupString(tree, "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress")
+		return v
+	}
+	assert.Equal(t, "10.0.0.1", ipOf(first))
+	assert.Equal(t, "10.0.0.2", ipOf(second), "second read must not be served from cache")
+	assert.Equal(t, 2, call, "each read must hit GenieACS")
 }
 
 func TestGetDeviceIDByIP_Success(t *testing.T) {
