@@ -89,15 +89,22 @@ Key invariants:
   in `tr069.go` — never inline `/devices/{id}/tasks?…`. The guard test
   `TestNoTaskURLWithoutConnectionRequest` + `TestDeviceTasksURL_AlwaysConnectionRequest`
   fail the build if an inline task URL omits the flag.
-- **Summon = scoped `getParameterValues`, not a bare ConnectionRequest**: the
-  Summon button submits a `getParameterValues` task with `?connection_request`,
-  scoped to the parameter subtree roots of the active tab (Overview:
-  `DeviceInfo`+`WANDevice.1`, Optical: `WANDevice.1` (covers ZTE `X_ZTE-COM_*`
-  and Huawei `X_GponInterafceConfig` optics under it), WiFi/LAN: `LANDevice.1`,
-  Actions: `DeviceInfo`). This both wakes the CPE and refreshes the values the
-  panel reads. A bodyless `POST …/tasks?connection_request` only pokes the CPE
-  and leaves the tree stale — do NOT use it for summon. Prefix paths must NOT
-  end in a dot (`…WANDevice.` faults with "Invalid parameter path"); use
+- **Summon = scoped `getParameterValues`, not a bare ConnectionRequest**: every
+  Summon control (the page header, plus a `Zap` button in the **Actions column
+  of each table row** and on non-table list cards) submits a
+  `getParameterValues` task with `?connection_request`, scoped to exactly the
+  TR-069 subtree that row/list reads — nothing wider:
+  Identification/Actions → `DeviceInfo`; Connectivity → `WANDevice`; Optical →
+  `WANDevice.1`; a WAN row → its concrete
+  `WANDevice.{n}.WANConnectionDevice.{m}.{WANPPP|WANIP}Connection.{i}`; a WLAN
+  slot/radio row → `LANDevice.1.WLANConfiguration.{n}`; a wireless-client row →
+  `…WLANConfiguration.{n}.AssociatedDevice`; a DHCP-lease row →
+  `LANDevice.1.Hosts.Host`. The header Summon refreshes the active tab's lists
+  in one task. GenieACS rejects wildcards (`…WLANConfiguration.*` → 400), so row
+  buttons name the concrete instance. This both wakes the CPE and refreshes the
+  values the panel reads. A bodyless `POST …/tasks?connection_request` only pokes
+  the CPE and leaves the tree stale — do NOT use it for summon. Prefix paths must
+  NOT end in a dot (`…WANDevice.` faults with "Invalid parameter path"); use
   `…WANDevice` or `…WANDevice.1` instead. Full-tree refresh
   (`InternetGatewayDevice`) blocks ~25s, close to `WorkerTaskTimeout` (30s) —
   prefer scoped subtrees.

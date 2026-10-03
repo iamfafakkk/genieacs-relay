@@ -14,6 +14,9 @@
 		rebootDevice,
 		setPPPoECredentials,
 		setWLANEnabled,
+		LIST_SCOPE,
+		TAB_SCOPE,
+		rowScopes,
 		wakeDevice,
 		wanStatus,
 		wifiClients,
@@ -89,7 +92,9 @@
 	let leases = $state<DHCPClient[] | null>(null);
 	let leasesErr = $state('');
 	let refreshing = $state(false);
-	let summoning = $state(false);
+	// Which Summon control is mid-flight: '' = idle, 'tab' = header, else a list
+	// key. Only one at a time — the worker pool serialises device tasks anyway.
+	let summoningKey = $state('');
 
 	let activeTab = $state('overview');
 	let pppoeUser = $state('');
@@ -324,27 +329,60 @@
 	}
 
 	// Summon: submit a scoped getParameterValues task with ?connection_request
-	// (via the worker pool, visible in Jobs), then re-read the active tab once
-	// the 'wake' job actually finishes. The task both wakes the CPE and
-	// refreshes the values the tab shows; task duration varies by scope
-	// (optical ~6s, wifi ~13s), so waiting on the job beats a fixed timer.
-	async function summon() {
-		if (!ip) return;
-		summoning = true;
+	// (via the worker pool, visible in Jobs), then re-read once the 'wake' job
+	// actually finishes. The task both wakes the CPE and refreshes the values
+	// the caller reads; task duration varies by scope (DeviceInfo ~3s, optical
+	// ~6s, wifi ~13s), so waiting on the job beats a fixed timer.
+	//   key      → identifies the pressed control, so only its spinner shows
+	//   reload   → 'all' | 'tab' | a list key (LIST reloads that data after)
+	async function summon(key: string, paths: readonly string[] | undefined, reload: string) {
+		if (!ip || summoningKey) return;
+		summoningKey = key;
 		try {
 			const seen = new Set(jobsState.jobs.map((j) => j.id));
-			await wakeDevice(ip, activeTab);
-			toast.success('Summon sent. Refreshing once the device dials in…');
+			await wakeDevice(ip, paths);
 			await waitForWakeJob(seen);
 			await loadSummary();
 			if (!ip) return;
-			if (activeTab === 'optical') await loadOptical(ip);
-			else if (activeTab === 'wifi') await loadWifi(ip);
-			else await loadOverview(ip);
+			if (reload === 'all') await loadDetails(ip);
+			else if (reload === 'tab') await reloadTab(activeTab);
+			else await reloadSummonList(reload, ip);
 		} catch (e) {
 			toast.error(`Summon failed: ${errMessage(e)}`);
 		} finally {
-			summoning = false;
+			summoningKey = '';
+		}
+	}
+
+	async function reloadTab(tab: string) {
+		if (tab === 'overview') await loadOverview(ip);
+		else if (tab === 'optical') await loadOptical(ip);
+		else if (tab === 'wifi') await loadWifi(ip);
+	}
+
+	async function reloadSummonList(key: string, target: string) {
+		switch (key) {
+			case 'deviceInfo':
+				await safe(() => deviceStatus(target), (v) => (status = v), (e) => (statusErr = e));
+				break;
+			case 'wan':
+				await safe(() => wanStatus(target), (v) => (wan = v.wan_connections), (e) => (wanErr = e));
+				break;
+			case 'optical':
+				await loadOptical(target);
+				break;
+			case 'wlan':
+				await safe(() => wlanConfigs(target, true), (v) => (wlans = v), (e) => (wlansErr = e));
+				break;
+			case 'radio':
+				await safe(() => wifiStats(target), (v) => (radioStats = v.radios), () => {});
+				break;
+			case 'clients':
+				await safe(() => wifiClients(target), (v) => (clients = v.clients), (e) => (clientsErr = e));
+				break;
+			case 'hosts':
+				await safe(() => dhcpClients(target), (v) => (leases = v), (e) => (leasesErr = e));
+				break;
 		}
 	}
 
@@ -387,14 +425,7 @@
 					{summary.ip}
 				</Badge>
 			{/if}
-			<Button variant="outline" size="sm" onclick={summon} disabled={summoning || summaryLoading || !ip}>
-				{#if summoning}
-					<Spinner data-icon="inline-start" />
-				{:else}
-					<ZapIcon data-icon="inline-start" />
-				{/if}
-				Summon
-			</Button>
+			{@render SummonButton({ key: 'tab', paths: TAB_SCOPE[activeTab], reload: 'tab' })}
 			<Button variant="outline" size="sm" onclick={refreshAll} disabled={refreshing || summaryLoading}>
 				{#if refreshing}
 					<Spinner data-icon="inline-start" />
@@ -431,7 +462,10 @@
 				<div class="grid gap-4 lg:grid-cols-2">
 					<Card.Root>
 						<Card.Header>
-							<Card.Title>Identification</Card.Title>
+							<div class="flex items-center justify-between gap-2">
+								<Card.Title>Identification</Card.Title>
+								{@render SummonButton({ key: 'deviceInfo', paths: LIST_SCOPE.deviceInfo, reload: 'deviceInfo' })}
+							</div>
 						</Card.Header>
 						<Card.Content class="grid grid-cols-2 gap-3 text-sm">
 							<div>
@@ -471,7 +505,10 @@
 
 					<Card.Root>
 						<Card.Header>
-							<Card.Title>Connectivity</Card.Title>
+							<div class="flex items-center justify-between gap-2">
+								<Card.Title>Connectivity</Card.Title>
+								{@render SummonButton({ key: 'wanConn', paths: LIST_SCOPE.wan, reload: 'wan' })}
+							</div>
 						</Card.Header>
 						<Card.Content class="grid grid-cols-2 gap-3 text-sm">
 							<div>
@@ -565,14 +602,22 @@
 														: '—'}
 												</Table.Cell>
 												<Table.Cell class="text-right">
-													<Button
-														variant="ghost"
-														size="icon-sm"
-														aria-label={`Edit WAN ${conn.type} instance ${conn.instance}`}
-														onclick={() => openWanEdit(conn)}
-													>
-														<PencilIcon />
-													</Button>
+													<div class="flex items-center justify-end gap-1">
+														{@render SummonButton({
+															key: `wan-${i}`,
+															paths: rowScopes.wan(conn),
+															reload: 'wan',
+															icon: true
+														})}
+														<Button
+															variant="ghost"
+															size="icon-sm"
+															aria-label={`Edit WAN ${conn.type} instance ${conn.instance}`}
+															onclick={() => openWanEdit(conn)}
+														>
+															<PencilIcon />
+														</Button>
+													</div>
 												</Table.Cell>
 											</Table.Row>
 										{/each}
@@ -592,19 +637,22 @@
 								<Card.Title>Optical interface</Card.Title>
 								<Card.Description>Tx/Rx power, bias current, temperature, and voltage.</Card.Description>
 							</div>
-							<Button
-								variant="outline"
-								size="sm"
-								onclick={() => ip && loadOptical(ip, true)}
-								disabled={opticalLoading}
-							>
-								{#if opticalLoading}
-									<Spinner data-icon="inline-start" />
-								{:else}
-									<RotateCwIcon data-icon="inline-start" />
-								{/if}
-								Refresh from CPE
-							</Button>
+							<div class="flex items-center gap-2">
+								{@render SummonButton({ key: 'optical', paths: LIST_SCOPE.optical, reload: 'optical' })}
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={() => ip && loadOptical(ip, true)}
+									disabled={opticalLoading}
+								>
+									{#if opticalLoading}
+										<Spinner data-icon="inline-start" />
+									{:else}
+										<RotateCwIcon data-icon="inline-start" />
+									{/if}
+									Refresh from CPE
+								</Button>
+							</div>
 						</div>
 					</Card.Header>
 					<Card.Content>
@@ -654,8 +702,12 @@
 			<Tabs.Content value="wifi" class="flex flex-col gap-4">
 				<Card.Root>
 					<Card.Header>
-						<Card.Title>WLAN slots</Card.Title>
-						<Card.Description>Slots provisioned on the CPE, whether broadcasting or not.</Card.Description>
+						<div class="flex items-center justify-between gap-2">
+							<div>
+								<Card.Title>WLAN slots</Card.Title>
+								<Card.Description>Slots provisioned on the CPE, whether broadcasting or not.</Card.Description>
+							</div>
+						</div>
 					</Card.Header>
 					<Card.Content>
 						{#if wlansErr}
@@ -678,6 +730,7 @@
 											<Table.Head>SSID</Table.Head>
 											<Table.Head>Band</Table.Head>
 											<Table.Head>Hidden</Table.Head>
+											<Table.Head class="text-right">Actions</Table.Head>
 										</Table.Row>
 									</Table.Header>
 									<Table.Body>
@@ -695,6 +748,14 @@
 												<Table.Cell>{w.ssid}</Table.Cell>
 												<Table.Cell>{w.band}</Table.Cell>
 												<Table.Cell>{w.hidden ? 'yes' : 'no'}</Table.Cell>
+												<Table.Cell class="text-right">
+													{@render SummonButton({
+														key: `wlan-${w.wlan}`,
+														paths: rowScopes.wlan(w.wlan),
+														reload: 'wlan',
+														icon: true
+													})}
+												</Table.Cell>
 											</Table.Row>
 										{/each}
 									</Table.Body>
@@ -706,11 +767,16 @@
 
 				<Card.Root>
 					<Card.Header>
-						<Card.Title>WLAN configuration</Card.Title>
-						<Card.Description>
-							Edit the SSID, security, password, channel, and width of an enabled slot. Enable a
-							slot above to configure it here.
-						</Card.Description>
+						<div class="flex items-start justify-between gap-2">
+							<div>
+								<Card.Title>WLAN configuration</Card.Title>
+								<Card.Description>
+									Edit the SSID, security, password, channel, and width of an enabled slot. Enable a
+									slot above to configure it here.
+								</Card.Description>
+							</div>
+							{@render SummonButton({ key: 'wlanCfg', paths: LIST_SCOPE.wlan, reload: 'wlan' })}
+						</div>
 					</Card.Header>
 					<Card.Content class="flex flex-col gap-4">
 						{#if wlans === null}
@@ -731,7 +797,9 @@
 				<div class="grid gap-4 lg:grid-cols-2">
 					<Card.Root>
 						<Card.Header>
-							<Card.Title>Radio statistics</Card.Title>
+							<div class="flex items-center justify-between gap-2">
+								<Card.Title>Radio statistics</Card.Title>
+							</div>
 						</Card.Header>
 						<Card.Content>
 							{#if radioStats === null}
@@ -746,6 +814,7 @@
 											<Table.Head>SSID</Table.Head>
 											<Table.Head>Channel</Table.Head>
 											<Table.Head>Tx power</Table.Head>
+											<Table.Head class="text-right">Actions</Table.Head>
 										</Table.Row>
 									</Table.Header>
 									<Table.Body>
@@ -755,6 +824,14 @@
 												<Table.Cell>{r.ssid ?? '—'}</Table.Cell>
 												<Table.Cell>{r.channel ?? '—'}</Table.Cell>
 												<Table.Cell>{r.tx_power_percent != null ? `${r.tx_power_percent}%` : '—'}</Table.Cell>
+												<Table.Cell class="text-right">
+													{@render SummonButton({
+														key: `radio-${r.wlan}`,
+														paths: rowScopes.wlan(String(r.wlan)),
+														reload: 'radio',
+														icon: true
+													})}
+												</Table.Cell>
 											</Table.Row>
 										{/each}
 									</Table.Body>
@@ -765,7 +842,9 @@
 
 					<Card.Root>
 						<Card.Header>
-							<Card.Title>Wireless clients</Card.Title>
+							<div class="flex items-center justify-between gap-2">
+								<Card.Title>Wireless clients</Card.Title>
+							</div>
 						</Card.Header>
 						<Card.Content>
 							{#if clientsErr}
@@ -785,6 +864,7 @@
 											<Table.Head>MAC</Table.Head>
 											<Table.Head>SSID</Table.Head>
 											<Table.Head>Band</Table.Head>
+											<Table.Head class="text-right">Actions</Table.Head>
 										</Table.Row>
 									</Table.Header>
 									<Table.Body>
@@ -793,6 +873,14 @@
 												<Table.Cell class="font-mono text-xs">{c.mac}</Table.Cell>
 												<Table.Cell>{c.ssid ?? '—'}</Table.Cell>
 												<Table.Cell>{c.band ?? '—'}</Table.Cell>
+												<Table.Cell class="text-right">
+													{@render SummonButton({
+														key: `client-${c.mac}`,
+														paths: rowScopes.wifiClient(c),
+														reload: 'clients',
+														icon: true
+													})}
+												</Table.Cell>
 											</Table.Row>
 										{/each}
 									</Table.Body>
@@ -838,6 +926,7 @@
 											<Table.Head>MAC</Table.Head>
 											<Table.Head>Hostname</Table.Head>
 											<Table.Head>IP</Table.Head>
+											<Table.Head class="text-right">Actions</Table.Head>
 										</Table.Row>
 									</Table.Header>
 									<Table.Body>
@@ -846,6 +935,14 @@
 												<Table.Cell class="font-mono text-xs">{l.mac}</Table.Cell>
 												<Table.Cell>{l.hostname || '—'}</Table.Cell>
 												<Table.Cell class="font-mono text-xs">{l.ip}</Table.Cell>
+												<Table.Cell class="text-right">
+													{@render SummonButton({
+														key: `lease-${l.mac}`,
+														paths: rowScopes.dhcpLease(),
+														reload: 'hosts',
+														icon: true
+													})}
+												</Table.Cell>
 											</Table.Row>
 										{/each}
 									</Table.Body>
@@ -869,7 +966,7 @@
 									<p class="text-sm font-medium">Wake</p>
 									<p class="text-muted-foreground text-xs">Fire a ConnectionRequest without queuing work.</p>
 								</div>
-								<Button variant="outline" size="sm" onclick={() => ip && runAction('Wake', () => wakeDevice(ip, activeTab))}>
+								<Button variant="outline" size="sm" onclick={() => ip && runAction('Wake', () => wakeDevice(ip, TAB_SCOPE[activeTab]))}>
 									<ZapIcon data-icon="inline-start" />
 									Wake
 								</Button>
@@ -984,6 +1081,38 @@
 		</div>
 	</Sheet.Content>
 </Sheet.Root>
+
+{#snippet SummonButton(props: { key: string; paths: readonly string[]; reload: string; icon?: boolean })}
+	{#if props.icon}
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			aria-label="Summon this instance"
+			onclick={() => summon(props.key, props.paths, props.reload)}
+			disabled={!!summoningKey || summaryLoading || !ip}
+		>
+			{#if summoningKey === props.key}
+				<Spinner data-icon="inline-start" />
+			{:else}
+				<ZapIcon />
+			{/if}
+		</Button>
+	{:else}
+		<Button
+			variant="outline"
+			size="sm"
+			onclick={() => summon(props.key, props.paths, props.reload)}
+			disabled={!!summoningKey || summaryLoading || !ip}
+		>
+			{#if summoningKey === props.key}
+				<Spinner data-icon="inline-start" />
+			{:else}
+				<ZapIcon data-icon="inline-start" />
+			{/if}
+			Summon
+		</Button>
+	{/if}
+{/snippet}
 
 {#snippet EmptyState(props: { title: string; description: string })}
 	<Empty.Root>

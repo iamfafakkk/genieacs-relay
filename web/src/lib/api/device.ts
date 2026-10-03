@@ -151,23 +151,45 @@ export function factoryResetDevice(ip: string): Promise<MessageResponse> {
 	return api(`/api/v1/genieacs/factory-reset/${encodeURIComponent(ip)}`, { method: 'POST' });
 }
 
-/** TR-069 subtree roots the Summon refresh should cover, per tab. Kept as
- *  roots (not the GenieACS config's long leaf lists): WAN => WANDevice.1,
- *  WLAN/LAN => LANDevice.1 (covers WLANConfiguration + Hosts + Ethernet). */
-const SUMMON_PATHS: Record<string, string[]> = {
-	overview: ['InternetGatewayDevice.DeviceInfo', 'InternetGatewayDevice.WANDevice.1'],
+/** TR-069 subtree root backing each device-detail list. A list's Summon
+ *  button sends exactly the path(s) that list reads — nothing wider. */
+export const LIST_SCOPE = {
+	deviceInfo: ['InternetGatewayDevice.DeviceInfo'],
+	wan: ['InternetGatewayDevice.WANDevice'],
 	optical: ['InternetGatewayDevice.WANDevice.1'],
-	wifi: ['InternetGatewayDevice.LANDevice.1'],
-	actions: ['InternetGatewayDevice.DeviceInfo']
+	wlan: ['InternetGatewayDevice.LANDevice.1.WLANConfiguration'],
+	hosts: ['InternetGatewayDevice.LANDevice.1.Hosts']
+} as const;
+
+/** Header Summon refreshes every list on the active tab in one task. */
+export const TAB_SCOPE: Record<string, readonly string[]> = {
+	overview: [...LIST_SCOPE.deviceInfo, ...LIST_SCOPE.wan],
+	optical: LIST_SCOPE.optical,
+	wifi: [...LIST_SCOPE.wlan, ...LIST_SCOPE.hosts],
+	actions: LIST_SCOPE.deviceInfo
+};
+
+/** Exact per-row Summon targets. GenieACS rejects wildcards (`…WLANConfiguration.*`
+ *  → 400), so a row's Summon names that row's concrete instance. */
+export const rowScopes = {
+	wan: (c: { wan_device: number; connection_device: number; instance: number; type: string }) => [
+		`InternetGatewayDevice.WANDevice.${c.wan_device}.WANConnectionDevice.${c.connection_device}.${
+			c.type === 'pppoe' ? 'WANPPPConnection' : 'WANIPConnection'
+		}.${c.instance}`
+	],
+	wlan: (wlan: string) => [`InternetGatewayDevice.LANDevice.1.WLANConfiguration.${wlan}`],
+	wifiClient: (c: { wlan: number }) => [
+		`InternetGatewayDevice.LANDevice.1.WLANConfiguration.${c.wlan}.AssociatedDevice`
+	],
+	dhcpLease: () => ['InternetGatewayDevice.LANDevice.1.Hosts.Host']
 };
 
 /**
- * Summon = wake the CPE AND refresh the values the active tab shows, via a
- * scoped getParameterValues with ?connection_request. Without a scope the
- * backend falls back to the Overview subtrees.
+ * Summon = wake the CPE AND refresh the given parameter subtrees, via a scoped
+ * getParameterValues with ?connection_request. Without paths the backend falls
+ * back to the Overview subtrees.
  */
-export function wakeDevice(ip: string, tab?: string): Promise<MessageResponse> {
-	const paths = tab ? SUMMON_PATHS[tab] : undefined;
+export function wakeDevice(ip: string, paths?: readonly string[]): Promise<MessageResponse> {
 	return api(`/api/v1/genieacs/wake/${encodeURIComponent(ip)}`, {
 		method: 'POST',
 		body: JSON.stringify({ paths })

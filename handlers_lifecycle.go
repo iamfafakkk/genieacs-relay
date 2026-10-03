@@ -18,9 +18,10 @@ import (
 
 // WakeRequest is the optional body for POST /wake/{ip}. Paths are dot-less
 // TR-069 parameter subtrees (e.g. "InternetGatewayDevice.WANDevice") the
-// getParameterValues refresh should cover — the admin panel sends one per
-// tab. A trailing dot faults ("Invalid parameter path"). Empty falls back
-// to the backend's Overview subtrees.
+// getParameterValues refresh should cover — the admin panel sends the subtree
+// backing the list (or tab) whose Summon button was pressed. A trailing dot
+// faults ("Invalid parameter path"). Empty falls back to the backend's
+// Overview subtrees.
 //
 // @Description Parameter subtrees to refresh on summon. Omit to refresh the backend default (DeviceInfo + WANDevice).
 type WakeRequest struct {
