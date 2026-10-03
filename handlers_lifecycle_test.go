@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -108,7 +109,63 @@ func TestWakeDeviceHandler_Success(t *testing.T) {
 	router.ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusAccepted, rr.Code)
-	assert.Contains(t, rr.Body.String(), "ConnectionRequest dispatched")
+	assert.Contains(t, rr.Body.String(), "Summon dispatched")
+}
+
+func TestWakeDeviceHandler_CustomPaths(t *testing.T) {
+	bodyCh := make(chan string, 1)
+	mockHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Query().Get("projection"), "_id") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(mockDeviceResponseWithLastInform()))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/tasks") {
+			bodyCh <- readBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	_, router := setupTestServer(t, mockHandler)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/genieacs/wake/"+mockDeviceIP,
+		strings.NewReader(`{"paths":["InternetGatewayDevice.WANDevice"]}`))
+	req.Header.Set("X-API-Key", mockAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusAccepted, rr.Code)
+
+	// The worker dispatches the getParameterValues task asynchronously.
+	select {
+	case gotBody := <-bodyCh:
+		assert.JSONEq(t,
+			`{"name":"getParameterValues","parameterNames":["InternetGatewayDevice.WANDevice"]}`,
+			gotBody)
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker never dispatched the getParameterValues task")
+	}
+}
+
+func TestWakeDeviceHandler_InvalidPath(t *testing.T) {
+	mockHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(mockDeviceResponseWithLastInform()))
+	})
+	_, router := setupTestServer(t, mockHandler)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/genieacs/wake/"+mockDeviceIP,
+		strings.NewReader(`{"paths":["has a space"]}`))
+	req.Header.Set("X-API-Key", mockAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestWakeDeviceHandler_DeviceNotFound(t *testing.T) {
@@ -126,16 +183,16 @@ func TestWakeDeviceHandler_DeviceNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rr.Code)
 }
 
-func TestWakeDeviceHandler_DispatchFails(t *testing.T) {
-	mockHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Query().Get("projection"), "_id") {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(mockDeviceResponseWithLastInform()))
-			return
-		}
-		w.WriteHeader(http.StatusBadGateway)
+func TestWakeDeviceHandler_QueueFull(t *testing.T) {
+	mockHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(mockDeviceResponseWithLastInform()))
 	})
 	_, router := setupTestServer(t, mockHandler)
+
+	origPool := taskWorkerPool
+	taskWorkerPool = &workerPool{workers: 0, queue: make(chan task)}
+	defer func() { taskWorkerPool = origPool }()
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/genieacs/wake/"+mockDeviceIP, nil)
@@ -143,6 +200,5 @@ func TestWakeDeviceHandler_DispatchFails(t *testing.T) {
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-	assert.Contains(t, rr.Body.String(), "ConnectionRequest dispatch failed")
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }

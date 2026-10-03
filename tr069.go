@@ -471,11 +471,15 @@ func isParamPathChar(c rune) bool {
 // deleteObject are part of the v2.2.0 Phase 1 structural foundation
 // but their Phase 4 LOW endpoint consumers (port forwarding rules,
 // static DHCP leases, GenieACS preset management, etc.) are not in
-// this commit. The functions are tested at 100% coverage standalone,
-// so the unused-symbol lint is suppressed via these compile-time
+// this commit. connectionRequest is the bare-ConnectionRequest
+// primitive kept for callers that need a pure wake with no refresh
+// (summon now sends a scoped getParameterValues instead). The
+// functions are tested at 100% coverage standalone, so the
+// unused-symbol lint is suppressed via these compile-time
 // references. They will become true call sites when Phase 4 lands.
 var (
 	_ = addObject
 	_ = parseAddObjectInstance
 	_ = deleteObject
+	_ = connectionRequest
 )

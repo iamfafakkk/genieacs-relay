@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import { listDevices } from '$lib/api/devices';
+	import { jobsState } from '$lib/stores/jobs.svelte';
 	import {
 		deviceCapability,
 		deviceStatus,
@@ -274,9 +275,7 @@
 	function openWanCreate() {
 		editingWan = null;
 		wanEditorOpen = true;
-	}
-
-	function openWanEdit(conn: WANConnection) {
+	}	function openWanEdit(conn: WANConnection) {
 		editingWan = conn;
 		wanEditorOpen = true;
 	}
@@ -311,20 +310,37 @@
 		}
 	}
 
-	// Send a bare TR-069 ConnectionRequest to wake the CPE, then re-read.
-	// The wake is fire-and-forget; the device dials in within 1-30s, so an
-	// immediate re-read may still show the pre-wake state.
+	// Wait for the just-submitted 'wake' job (one whose id wasn't in `seen`) to
+	// reach a terminal state, polled from the live job store. Resolves when the
+	// job finishes; times out after 40s so a stuck job can't hang the button.
+	async function waitForWakeJob(seen: Set<string>): Promise<string> {
+		const deadline = Date.now() + 40_000;
+		while (Date.now() < deadline) {
+			const job = jobsState.jobs.find((j) => j.type === 'wake' && !seen.has(j.id));
+			if (job && (job.status === 'success' || job.status === 'failed')) return job.status;
+			await new Promise((r) => setTimeout(r, 500));
+		}
+		return 'timeout';
+	}
+
+	// Summon: submit a scoped getParameterValues task with ?connection_request
+	// (via the worker pool, visible in Jobs), then re-read the active tab once
+	// the 'wake' job actually finishes. The task both wakes the CPE and
+	// refreshes the values the tab shows; task duration varies by scope
+	// (optical ~6s, wifi ~13s), so waiting on the job beats a fixed timer.
 	async function summon() {
 		if (!ip) return;
 		summoning = true;
 		try {
-			await wakeDevice(ip);
-			toast.success('Connection request sent. Reloading once the device dials in…');
-			// Give the CPE a moment to open its CWMP session; an immediate
-			// read would still show the pre-wake snapshot.
-			await new Promise((r) => setTimeout(r, 6000));
+			const seen = new Set(jobsState.jobs.map((j) => j.id));
+			await wakeDevice(ip, activeTab);
+			toast.success('Summon sent. Refreshing once the device dials in…');
+			await waitForWakeJob(seen);
 			await loadSummary();
-			if (ip) await loadDetails(ip);
+			if (!ip) return;
+			if (activeTab === 'optical') await loadOptical(ip);
+			else if (activeTab === 'wifi') await loadWifi(ip);
+			else await loadOverview(ip);
 		} catch (e) {
 			toast.error(`Summon failed: ${errMessage(e)}`);
 		} finally {
@@ -853,7 +869,7 @@
 									<p class="text-sm font-medium">Wake</p>
 									<p class="text-muted-foreground text-xs">Fire a ConnectionRequest without queuing work.</p>
 								</div>
-								<Button variant="outline" size="sm" onclick={() => ip && runAction('Wake', () => wakeDevice(ip))}>
+								<Button variant="outline" size="sm" onclick={() => ip && runAction('Wake', () => wakeDevice(ip, activeTab))}>
 									<ZapIcon data-icon="inline-start" />
 									Wake
 								</Button>

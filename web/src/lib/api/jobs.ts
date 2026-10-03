@@ -49,6 +49,8 @@ export function jobLabel(type: string): string {
 			return 'Committing changes';
 		case 'refreshWLAN':
 			return 'Refreshing WLAN';
+		case 'wake':
+			return 'Summoning device';
 		case 'wanAdd':
 			return 'Adding WAN connection';
 		case 'wanUpdate':

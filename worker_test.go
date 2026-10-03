@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -132,6 +133,40 @@ func TestWorker_ClearsCacheAfterTask(t *testing.T) {
 
 	_, found := deviceCacheInstance.get("cache-device")
 	assert.False(t, found, "cache should be cleared once the worker applied the task")
+}
+
+// TestWorker_WakeRefreshesTabs verifies the summon task type (taskTypeWake)
+// issues a real TR-069 getParameterValues through the worker pool: a POST to
+// /devices/{id}/tasks?connection_request carrying the tab-scoped paths.
+func TestWorker_WakeRefreshesTabs(t *testing.T) {
+	originalHTTPClient := httpClient
+	originalBaseURL := geniesBaseURL
+	var gotPath, gotQuery, gotBody string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(mockServer.Close)
+	httpClient = mockServer.Client()
+	geniesBaseURL = mockServer.URL
+	t.Cleanup(func() {
+		httpClient = originalHTTPClient
+		geniesBaseURL = originalBaseURL
+	})
+
+	wp := &workerPool{workers: 1, queue: make(chan task, 10), wg: sync.WaitGroup{}}
+	wp.Start()
+	wp.Submit("wake-device", taskTypeWake, nil, "InternetGatewayDevice.WANDevice")
+	wp.Stop()
+
+	assert.Equal(t, "/devices/wake-device/tasks", gotPath)
+	assert.Equal(t, "connection_request", gotQuery)
+	assert.JSONEq(t,
+		`{"name":"getParameterValues","parameterNames":["InternetGatewayDevice.WANDevice"]}`,
+		gotBody, "summon must refresh (getParameterValues), not just poke")
 }
 
 // --- Worker Pool Deadlock Prevention Tests ---

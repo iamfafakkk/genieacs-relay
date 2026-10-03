@@ -26,6 +26,7 @@ type task struct {
 	deviceID string          // Target device identifier for the task
 	taskType string          // Type of task to execute (see taskType constants)
 	params   [][]interface{} // Parameters for parameter-setting tasks
+	paths    []string        // Parameter paths for getParameterValues tasks (wake)
 }
 
 // Start initializes the worker pool by launching all worker goroutines
@@ -65,6 +66,8 @@ func (wp *workerPool) worker() {
 			err = setParameterValues(ctx, t.deviceID, t.params)
 		case taskTypeApplyChanges, taskTypeRefreshWLAN:
 			err = refreshWLANConfig(ctx, t.deviceID)
+		case taskTypeWake:
+			err = getParameterValuesLive(ctx, t.deviceID, t.paths)
 		default:
 			err = fmt.Errorf("unknown task type: %s", t.taskType)
 		}
@@ -100,10 +103,13 @@ func (wp *workerPool) worker() {
 // Submit adds a new task to the worker pool queue for asynchronous processing.
 // It records the task in the job registry (visible via GET /jobs) and returns
 // the generated job ID plus false if the queue is full.
-func (wp *workerPool) Submit(deviceID, taskType string, params [][]interface{}) (string, bool) {
+//
+// paths is only used by taskTypeWake (the getParameterValues refresh); other
+// task types ignore it.
+func (wp *workerPool) Submit(deviceID, taskType string, params [][]interface{}, paths ...string) (string, bool) {
 	id := jobRegistryInstance.add(taskType, deviceID, len(params))
 	select {
-	case wp.queue <- task{jobID: id, deviceID: deviceID, taskType: taskType, params: params}:
+	case wp.queue <- task{jobID: id, deviceID: deviceID, taskType: taskType, params: params, paths: paths}:
 		return id, true
 	default:
 		logger.Warn("Worker pool queue full, task dropped",

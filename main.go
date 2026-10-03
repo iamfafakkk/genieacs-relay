@@ -73,6 +73,7 @@ const (
 	taskTypeSetParams    = TaskTypeSetParams
 	taskTypeApplyChanges = TaskTypeApplyChanges
 	taskTypeRefreshWLAN  = TaskTypeRefreshWLAN
+	taskTypeWake         = TaskTypeWake
 )
 
 // Global variables for application configuration and shared resources

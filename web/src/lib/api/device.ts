@@ -151,8 +151,27 @@ export function factoryResetDevice(ip: string): Promise<MessageResponse> {
 	return api(`/api/v1/genieacs/factory-reset/${encodeURIComponent(ip)}`, { method: 'POST' });
 }
 
-export function wakeDevice(ip: string): Promise<MessageResponse> {
-	return api(`/api/v1/genieacs/wake/${encodeURIComponent(ip)}`, { method: 'POST' });
+/** TR-069 subtree roots the Summon refresh should cover, per tab. Kept as
+ *  roots (not the GenieACS config's long leaf lists): WAN => WANDevice.1,
+ *  WLAN/LAN => LANDevice.1 (covers WLANConfiguration + Hosts + Ethernet). */
+const SUMMON_PATHS: Record<string, string[]> = {
+	overview: ['InternetGatewayDevice.DeviceInfo', 'InternetGatewayDevice.WANDevice.1'],
+	optical: ['InternetGatewayDevice.WANDevice.1'],
+	wifi: ['InternetGatewayDevice.LANDevice.1'],
+	actions: ['InternetGatewayDevice.DeviceInfo']
+};
+
+/**
+ * Summon = wake the CPE AND refresh the values the active tab shows, via a
+ * scoped getParameterValues with ?connection_request. Without a scope the
+ * backend falls back to the Overview subtrees.
+ */
+export function wakeDevice(ip: string, tab?: string): Promise<MessageResponse> {
+	const paths = tab ? SUMMON_PATHS[tab] : undefined;
+	return api(`/api/v1/genieacs/wake/${encodeURIComponent(ip)}`, {
+		method: 'POST',
+		body: JSON.stringify({ paths })
+	});
 }
 
 export function setPPPoECredentials(

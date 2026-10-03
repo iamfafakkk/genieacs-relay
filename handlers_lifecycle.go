@@ -16,6 +16,17 @@ import (
 // IP, dispatch the RPC, return 202 on success. No vendor-specific
 // path detection because the underlying TR-069 RPCs are dialect-agnostic.
 
+// WakeRequest is the optional body for POST /wake/{ip}. Paths are dot-less
+// TR-069 parameter subtrees (e.g. "InternetGatewayDevice.WANDevice") the
+// getParameterValues refresh should cover — the admin panel sends one per
+// tab. A trailing dot faults ("Invalid parameter path"). Empty falls back
+// to the backend's Overview subtrees.
+//
+// @Description Parameter subtrees to refresh on summon. Omit to refresh the backend default (DeviceInfo + WANDevice).
+type WakeRequest struct {
+	Paths []string `json:"paths,omitempty"`
+}
+
 // factoryResetDeviceHandler triggers a TR-069 FactoryReset RPC against
 // the CPE. Destructive — wipes all locally-stored config (PPPoE creds,
 // WLAN, port-forward rules, etc) and reboots the device. The CPE is
@@ -55,29 +66,28 @@ func factoryResetDeviceHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// wakeDeviceHandler fires a TR-069 ConnectionRequest against the CPE
-// without queuing any actual work. Used to:
+// wakeDeviceHandler fires a TR-069 getParameterValues against the CPE with
+// `?connection_request`, scoped to the parameter subtrees the caller asked
+// for (one per admin-panel tab). This is the "summon" action: it both wakes
+// the device (connection_request) and refreshes the values the panel shows,
+// instead of poking the CPE and leaving the tree stale.
 //
-//   - Wake a freshly-installed CPE so the first config push lands
-//     synchronously instead of waiting for the next periodic inform.
-//   - Wake an idle device for diagnostics.
-//   - Probe responsiveness as part of a health check.
+// Dispatched through the worker pool (like refreshWLAN) so the request does
+// not block and the wake appears in GET /jobs alongside other async work.
 //
-// Fire-and-forget — does NOT block waiting for the device to actually
-// dial home. Typical wake takes 1-30 seconds depending on CPE CWMP
-// timer config and current network conditions.
-//
-//	@Summary		Wake CPE via TR-069 ConnectionRequest
-//	@Description	Fires a TR-069 ConnectionRequest against the CPE without queuing any actual work. Used to wake a freshly-installed CPE so the first config push lands synchronously, wake an idle device for diagnostics, or probe responsiveness. Fire-and-forget — does NOT block waiting for the device to actually dial home. Typical wake takes 1-30 seconds.
+//	@Summary		Summon CPE (refresh + wake)
+//	@Description	Submits a TR-069 getParameterValues task with ?connection_request, scoped to the given parameter subtrees, so the CPE both wakes immediately and refreshes the values the admin panel reads. Dispatched asynchronously via the worker pool; monitor progress in GET /jobs.
 //	@Tags			Lifecycle
+//	@Accept			json
 //	@Produce		json
-//	@Param			ip	path		string	true	"Device IP address"	example(192.168.1.1)
-//	@Success		202	{object}	Response{data=MessageResponse}
-//	@Failure		400	{object}	Response
-//	@Failure		401	{object}	Response
-//	@Failure		404	{object}	Response
-//	@Failure		429	{object}	Response
-//	@Failure		500	{object}	Response
+//	@Param			ip		path		string			true	"Device IP address"	example(192.168.1.1)
+//	@Param			body	body		WakeRequest		false	"Parameter subtrees to refresh (defaults to the whole tree)"
+//	@Success		202		{object}	Response{data=MessageResponse}
+//	@Failure		400		{object}	Response
+//	@Failure		401		{object}	Response
+//	@Failure		404		{object}	Response
+//	@Failure		429		{object}	Response
+//	@Failure		500		{object}	Response
 //	@Security		ApiKeyAuth
 //	@Router			/wake/{ip} [post]
 func wakeDeviceHandler(w http.ResponseWriter, r *http.Request) {
@@ -85,10 +95,33 @@ func wakeDeviceHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := connectionRequest(r.Context(), deviceID); err != nil {
-		logger.Error("ConnectionRequest dispatch failed",
-			zap.String("deviceID", deviceID), zap.Error(err))
-		sendError(w, r, http.StatusInternalServerError, ErrCodeGenieACS, ErrWakeFailed)
+
+	// Body is optional: an empty request falls back to the Overview subtrees.
+	// Validate each caller-supplied path before forwarding it to the NBI.
+	var req WakeRequest
+	if r.ContentLength != 0 {
+		if !ParseJSONRequest(w, r, &req) {
+			return
+		}
+		for _, p := range req.Paths {
+			if err := validateTRParamPath(p); err != nil {
+				sendError(w, r, http.StatusBadRequest, ErrCodeValidation, formatInvalidParamPath(p))
+				return
+			}
+		}
+	}
+	if len(req.Paths) == 0 {
+		// No body → refresh the data the Overview tab reads. Deliberately not
+		// the whole tree: a full-tree getParameterValues blocks ~25s on the
+		// observed HG8145V5, uncomfortably close to WorkerTaskTimeout (30s).
+		req.Paths = []string{
+			PathInternetGatewayDevice + ".DeviceInfo",
+			PathInternetGatewayDevice + ".WANDevice.1",
+		}
+	}
+
+	if _, ok := taskWorkerPool.Submit(deviceID, taskTypeWake, nil, req.Paths...); !ok {
+		sendError(w, r, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, ErrWorkerPoolBusy)
 		return
 	}
 	sendResponse(w, http.StatusAccepted, MessageResponse{

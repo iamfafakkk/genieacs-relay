@@ -7,6 +7,7 @@ const (
 	TaskTypeSetParams    = "setParameterValues"
 	TaskTypeApplyChanges = "applyChanges"
 	TaskTypeRefreshWLAN  = "refreshWLAN"
+	TaskTypeWake         = "wake" // summon: getParameterValues scoped to the active tab + connection_request
 	// WAN CRUD runs synchronously (connection_request) rather than through
 	// the worker pool, but is still recorded in the job registry so it
 	// appears alongside queued tasks in GET /jobs.
@@ -439,7 +440,7 @@ const (
 
 	// v2.2.0 — CPE lifecycle, status, params, PPPoE
 	MsgFactoryResetSubmitted = "FactoryReset task submitted. Device will be unreachable for 60-180 seconds, will lose its current PPPoE credentials and WLAN config, and will rejoin the ACS in a fresh provisioning state."
-	MsgWakeDispatched        = "ConnectionRequest dispatched to device. Wake-up takes 1-30 seconds depending on CPE responsiveness."
+	MsgWakeDispatched        = "Summon dispatched: getParameterValues refresh queued with connection request. Wake-up takes 1-30 seconds depending on CPE responsiveness."
 	MsgPPPoEUpdated          = "PPPoE credentials updated. Device will reconnect within 30s."
 	MsgWANConnectionCreated  = "WAN connection created and applied via connection request."
 	MsgWANConnectionUpdated  = "WAN connection updated via connection request."

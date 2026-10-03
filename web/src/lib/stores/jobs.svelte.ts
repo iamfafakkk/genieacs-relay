@@ -55,10 +55,14 @@ export async function refreshJobs(): Promise<void> {
 
 function announce(job: Job) {
 	const title = `${jobLabel(job.type)} — ${job.device_id}`;
+	// Reset to a finite duration: the loading toast was created with
+	// `duration: Infinity` so it survived the whole run, and updateToast would
+	// otherwise carry that Infinity into the terminal toast (never auto-closing).
+	const opts = { id: job.id, description: 'Completed', duration: 5000 };
 	if (job.status === 'success') {
-		toast.success(title, { id: job.id, description: 'Completed' });
+		toast.success(title, opts);
 	} else {
-		toast.error(title, { id: job.id, description: job.error || 'Failed' });
+		toast.error(title, { ...opts, description: job.error || 'Failed' });
 	}
 }
 
@@ -82,10 +86,13 @@ function apply(res: { jobs: Job[]; active: number; count: number }) {
 			}
 		} else if (!seen.has(job.id)) {
 			// Queued/running: keep a loading toast alive across refresh by
-			// keying it on the stable job id.
+			// keying it on the stable job id. duration: Infinity is essential —
+			// without it sonner falls back to the 4s default and the toast
+			// vanishes while the job is still running.
 			toast.loading(`${jobLabel(job.type)} — ${job.device_id}`, {
 				id: job.id,
-				description: 'Running…'
+				description: 'Running…',
+				duration: Number.POSITIVE_INFINITY
 			});
 		}
 	}
