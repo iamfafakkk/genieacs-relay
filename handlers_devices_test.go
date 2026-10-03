@@ -408,6 +408,68 @@ func TestDeviceSummaryFromTree_MalformedID(t *testing.T) {
 	assert.Empty(t, d.LastInform)
 }
 
+// --- dominantVendorNamespace ---
+
+func TestDominantVendorNamespace(t *testing.T) {
+	cases := map[string]struct {
+		doc  map[string]interface{}
+		want string
+	}{
+		"none → TR-098": {
+			doc:  map[string]interface{}{"InternetGatewayDevice": map[string]interface{}{"DeviceInfo": map[string]interface{}{}}},
+			want: "TR-098",
+		},
+		"huawei": {
+			doc: map[string]interface{}{"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"X_HW_VLAN":        map[string]interface{}{"_value": 90},
+					"X_HW_SERVICELIST": map[string]interface{}{"_value": "INTERNET"},
+					"X_GponInterafceConfig": map[string]interface{}{
+						"RxPower": map[string]interface{}{"_value": "-20"},
+					},
+				},
+			}},
+			want: "X_HW",
+		},
+		"zte wins by count": {
+			doc: map[string]interface{}{"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"X_ZTE-COM_VLANID":     map[string]interface{}{"_value": 90},
+					"X_ZTE-COM_VLANEnable": map[string]interface{}{"_value": true},
+					"X_HW_VLAN":            map[string]interface{}{"_value": 90},
+				},
+			}},
+			want: "X_ZTE-COM",
+		},
+		"tie breaks lexically": {
+			doc: map[string]interface{}{"WANDevice": map[string]interface{}{
+				"1": map[string]interface{}{
+					"X_HW_VLAN":      map[string]interface{}{"_value": 1},
+					"X_ZTE-COM_VLAN": map[string]interface{}{"_value": 2},
+				},
+			}},
+			want: "X_HW",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, dominantVendorNamespace(tc.doc))
+		})
+	}
+}
+
+func TestDeviceSummaryFromTree_ParamSet(t *testing.T) {
+	d := deviceSummaryFromTree(map[string]interface{}{
+		"_id": "device-001",
+		"WANDevice": map[string]interface{}{
+			"1": map[string]interface{}{
+				"X_HW_VLAN": map[string]interface{}{"_value": 90},
+			},
+		},
+	})
+	assert.Equal(t, "X_HW", d.ParamSet)
+}
+
 // --- listDevicesHandler ---
 
 // devicesMockHandler handles the GenieACS devices NBI query for

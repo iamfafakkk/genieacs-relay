@@ -8,6 +8,8 @@ export interface DeviceSummary {
 	model?: string;
 	serial?: string;
 	mac?: string;
+	/** Vendor parameter structure, e.g. "X_HW", "X_ZTE-COM", or "TR-098". */
+	param_set?: string;
 	pppoe_username?: string;
 	/** Optical receive power in dBm; absent when the CPE reports no optics. */
 	rx_power_dbm?: number;

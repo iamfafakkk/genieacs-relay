@@ -56,6 +56,13 @@ type DeviceSummary struct {
 	Serial       string `json:"serial,omitempty"`
 	MAC          string `json:"mac,omitempty"`
 
+	// ParamSet — vendor parameter structure the device exposes, named by the
+	// dominant `X_<NS>_` namespace in its tree (e.g. "X_HW", "X_ZTE-COM"),
+	// or "TR-098" when it has no vendor extension. Lets the dashboard group
+	// devices by the parameter structure they actually speak, independent of
+	// model/rebadge.
+	ParamSet string `json:"param_set,omitempty"`
+
 	// PPPoEUsername — WAN PPPoE username, when the CPE terminates PPPoE
 	// itself in router mode.
 	PPPoEUsername string `json:"pppoe_username,omitempty"`
@@ -370,6 +377,7 @@ func deviceSummaryFromTree(doc map[string]interface{}) DeviceSummary {
 	}
 	d.PPPoEUsername = wanString(doc, "Username")
 	d.RxPowerDbm = extractRxPower(doc)
+	d.ParamSet = dominantVendorNamespace(doc)
 
 	// Fallback: extract model and serial from _id when TR-069 params
 	// are not yet discovered. _id format: "OUI-ProductClass-Serial".
@@ -386,6 +394,49 @@ func deviceSummaryFromTree(doc map[string]interface{}) DeviceSummary {
 	}
 
 	return d
+}
+
+// deviceParamSetTR098 is the label for devices that expose no vendor
+// extension namespace — they speak the plain TR-098 IGD model.
+const deviceParamSetTR098 = "TR-098"
+
+// vendorNamespaceRe matches the leading vendor namespace of a vendor
+// extension parameter, e.g. "X_HW_" in X_HW_VLAN or "X_ZTE-COM_" in
+// X_ZTE-COM_VLANID. The namespace is the segment up to the first
+// underscore after "X_".
+var vendorNamespaceRe = regexp.MustCompile(`^(X_[A-Za-z0-9-]+?)_`)
+
+// dominantVendorNamespace returns the vendor parameter namespace the
+// device's tree is built on — the most frequent `X_<NS>_` prefix across
+// all parameter keys (recursively). Real fleets are cleanly one-vendor;
+// the counts just make the result robust to a stray foreign parameter.
+// Returns "TR-098" when no vendor extension is present.
+func dominantVendorNamespace(doc map[string]interface{}) string {
+	counts := map[string]int{}
+	var walk func(m map[string]interface{})
+	walk = func(m map[string]interface{}) {
+		for k, v := range m {
+			if mm := vendorNamespaceRe.FindStringSubmatch(k); mm != nil {
+				counts[mm[1]]++
+			}
+			if child, ok := v.(map[string]interface{}); ok {
+				walk(child)
+			}
+		}
+	}
+	walk(doc)
+
+	best := ""
+	bestN := 0
+	for ns, n := range counts {
+		if n > bestN || (n == bestN && ns < best) {
+			best, bestN = ns, n
+		}
+	}
+	if best == "" {
+		return deviceParamSetTR098
+	}
+	return best
 }
 
 // wanDeviceSubtree returns the projected InternetGatewayDevice.WANDevice

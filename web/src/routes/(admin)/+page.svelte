@@ -67,6 +67,29 @@
 	const rxWeak = $derived(rxWindow.filter((d) => { const v = d.rx_power_dbm as number; return v <= -27 && v > -30; }).length);
 	const rxCritical = $derived(rxWindow.filter((d) => (d.rx_power_dbm as number) <= -30).length);
 
+	// Fleet grouped by vendor parameter structure (param_set: X_HW, X_ZTE-COM,
+	// TR-098, …) — the shape of the tree the CPE actually speaks — with a
+	// status breakdown and the models seen in each group.
+	const byParamSet = $derived(
+		[...devices
+			.reduce((m, d) => {
+				const ps = d.param_set || 'TR-098';
+				const g = m.get(ps) ?? { total: 0, online: 0, models: new Set<string>() };
+				g.total++;
+				if (isOnline(d)) g.online++;
+				g.models.add(d.model || 'Unknown');
+				m.set(ps, g);
+				return m;
+			}, new Map<string, { total: number; online: number; models: Set<string> }>())]
+			.map(([ps, g]) => ({
+				ps,
+				...g,
+				offline: g.total - g.online,
+				models: [...g.models].sort()
+			}))
+			.sort((a, b) => b.total - a.total || a.ps.localeCompare(b.ps))
+	);
+
 	// Top models by device count.
 	const byModel = $derived(
 		[...devices.reduce((m, d) => {
@@ -201,6 +224,52 @@
 			</Card.Footer>
 		</Card.Root>
 	</div>
+
+	<Card.Root>
+		<Card.Header class="flex-row items-center justify-between gap-2 space-y-0">
+			<div>
+				<Card.Title>Devices by Parameter Structure</Card.Title>
+				<Card.Description>Fleet grouped by vendor parameter namespace — same tree, same row.</Card.Description>
+			</div>
+			<ServerIcon class="text-muted-foreground size-4" />
+		</Card.Header>
+		<Card.Content>
+			{#if refreshing && !loaded}
+				<Skeleton class="h-24 w-full" />
+			{:else if byParamSet.length === 0}
+				<p class="text-muted-foreground text-sm">No devices yet.</p>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head>Parameter Set</Table.Head>
+							<Table.Head>Models</Table.Head>
+							<Table.Head class="text-right">Online</Table.Head>
+							<Table.Head class="text-right">Offline</Table.Head>
+							<Table.Head class="text-right">Total</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each byParamSet as row (row.ps)}
+							<Table.Row>
+								<Table.Cell class="font-mono text-xs">{row.ps}</Table.Cell>
+								<Table.Cell class="text-muted-foreground">{row.models.join(', ')}</Table.Cell>
+								<Table.Cell class="text-right">
+									<Badge variant="outline" class="border-success/50 text-success">{row.online}</Badge>
+								</Table.Cell>
+								<Table.Cell class="text-right">
+									<Badge variant="outline" class="border-destructive/50 text-destructive">
+										{row.offline}
+									</Badge>
+								</Table.Cell>
+								<Table.Cell class="text-right font-mono text-xs">{row.total}</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+		</Card.Content>
+	</Card.Root>
 </div>
 
 {#snippet signalRow(label: string, value: number, denom: number, bucket: string, badgeClass: string)}
