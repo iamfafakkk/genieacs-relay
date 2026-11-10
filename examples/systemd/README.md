@@ -4,19 +4,22 @@ Deploy GenieACS Relay as a systemd service on Linux servers.
 
 ## Quick Install
 
+Clone on the target Linux host, then run the installer from the repo root (builds
+Go binary + admin UI, installs under `/opt/genieacs-relay`, enables systemd):
+
 ```bash
-# Build binary
-go build -ldflags="-w -s" -o genieacs-relay .
-
-# Copy files to server
-scp genieacs-relay user@server:/tmp/
-scp examples/systemd/* user@server:/tmp/
-
-# On the server, run the installer
-ssh user@server
-cd /tmp
+git clone https://github.com/Cepat-Kilat-Teknologi/genieacs-relay.git
+cd genieacs-relay
 sudo chmod +x install.sh
 sudo ./install.sh
+```
+
+API-only (no Node/pnpm): `sudo ./install.sh --api-only`
+
+Remote one-liner after copying the repo:
+
+```bash
+sudo ./examples/systemd/install.sh
 ```
 
 ## Manual Installation
@@ -100,16 +103,15 @@ sudo journalctl -u genieacs-relay -n 100
 
 ## Update
 
+From the git clone on the server (after `install.sh`):
+
 ```bash
-# Stop service
-sudo systemctl stop genieacs-relay
-
-# Replace binary
-sudo cp genieacs-relay-new /usr/local/bin/genieacs-relay
-
-# Start service
-sudo systemctl start genieacs-relay
+cd genieacs-relay
+sudo ./update.sh
 ```
+
+Same flow as GOTICKET: `git pull` → stop → build Go + admin UI → deploy to `/opt/genieacs-relay` → start.
+API-only: `sudo ./update.sh --api-only`
 
 ## Uninstall
 
