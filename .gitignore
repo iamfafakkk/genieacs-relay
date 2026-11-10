@@ -16,7 +16,8 @@ coverage.out
 coverage.txt
 test-results/
 *.cover
-*.html
+/coverage.html
+test-results/**/*.html
 
 # IDE/editor
 .vscode/

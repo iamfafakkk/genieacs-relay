@@ -4,7 +4,8 @@ tmp/
 dist/
 test-results/
 coverage.out
-*.html
+/coverage.html
+test-results/**/*.html
 
 # Local dev
 .env
