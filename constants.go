@@ -407,6 +407,16 @@ const (
 	ErrPresetBodyRequired         = "preset body is required for PUT"
 	ErrPresetDispatchFailed       = "Failed to dispatch preset operation via NBI"
 	ErrEnabledRequired            = "enabled is required (true or false)"
+	// v2.2.0 — router web login accounts (/account/{ip})
+	ErrAccountPasswordRequired   = "password is required"
+	ErrAccountPasswordTooLong    = "password too long (max 64 chars)"
+	ErrAccountUsernameTooLong    = "username too long (max 64 chars)"
+	ErrAccountUsernameWhitespace = "username must not contain whitespace"
+	ErrAccountReadFailed         = "Failed to read device tree for account parameters"
+	ErrAccountUnsupported        = "This CPE exposes no known router account parameter tree (ZTE X_ZTE-COM_WebUserInfo, Huawei X_HW_WebUserInfo, FiberHome X_FH_WebUserInfo, or TR-098 User)."
+	ErrAccountDispatchFailed     = "Failed to dispatch router account update"
+	ErrAccountNoFields           = "At least one of username, password, or enabled must be provided for a single-account update"
+	ErrAccountPathUnknown        = "path and label do not match an account this device exposes"
 )
 
 // Firmware default values
@@ -464,6 +474,9 @@ const (
 	MsgMacFilterUpdated     = "MAC filter update dispatched."
 	MsgTagsUpdated          = "Tag update dispatched via GenieACS NBI."
 	MsgPresetUpdated        = "Preset operation dispatched via GenieACS NBI."
+	// MsgAccountUpdated is a success message, not a credential.
+	//nolint:gosec // G101: success message for the account endpoint, not an actual credential
+	MsgAccountUpdated = "Router account credentials update dispatched."
 )
 
 // XSD types for GenieACS

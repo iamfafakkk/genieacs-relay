@@ -313,6 +313,8 @@ func runServer(addr string) error {
 		r.Post("/params/{ip}", getGenericParamsHandler)
 		// v2.2.0 — provisioning (PPPoE credentials, firmware, QoS, bridge mode)
 		r.Put("/pppoe/{ip}", setPPPoECredentialsHandler)
+		r.Get("/account/{ip}", getAccountHandler)
+		r.Put("/account/{ip}", setAccountHandler)
 		r.Post("/firmware/{ip}", firmwareUpgradeHandler)
 		r.Put("/qos/{ip}", setQoSHandler)
 		r.Put("/bridge-mode/{ip}", setBridgeModeHandler)

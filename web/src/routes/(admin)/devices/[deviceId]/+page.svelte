@@ -6,6 +6,7 @@
 	import { listDevices } from '$lib/api/devices';
 	import { jobsState } from '$lib/stores/jobs.svelte';
 	import {
+		accountInfo,
 		deviceCapability,
 		deviceStatus,
 		dhcpClients,
@@ -14,6 +15,7 @@
 		rebootDevice,
 		setPPPoECredentials,
 		setWLANEnabled,
+		updateAccount,
 		LIST_SCOPE,
 		TAB_SCOPE,
 		rowScopes,
@@ -25,6 +27,7 @@
 		wlanConfigs
 	} from '$lib/api/device';
 	import type {
+		AccountEntry,
 		DeviceCapability,
 		DeviceStatus,
 		DeviceSummary,
@@ -59,6 +62,8 @@
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import PowerIcon from '@lucide/svelte/icons/power';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import EyeIcon from '@lucide/svelte/icons/eye';
+	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
 	import ZapIcon from '@lucide/svelte/icons/zap';
 	import ThermometerIcon from '@lucide/svelte/icons/thermometer';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
@@ -91,6 +96,21 @@
 	let clientsErr = $state('');
 	let leases = $state<DHCPClient[] | null>(null);
 	let leasesErr = $state('');
+	let accounts = $state<AccountEntry[] | null>(null);
+	let accountsErr = $state('');
+	// Passwords are masked until revealed per row; the map holds only rows
+	// the operator explicitly opened during this visit.
+	let revealedAccounts = $state<Record<string, boolean>>({});
+	// Optimistic enabled state per row: the CPE only reflects the change on
+	// its next inform, so mirror operator intent locally like the WLAN toggles.
+	let accountEnabled = $state<Record<string, boolean>>({});
+	let accountToggling = $state<Record<string, boolean>>({});
+	let accountEditorOpen = $state(false);
+	let editingAccount = $state<AccountEntry | null>(null);
+	let accountDraftUser = $state('');
+	let accountDraftPass = $state('');
+	let accountDraftEnabled = $state<boolean | undefined>(undefined);
+	let accountEditorBusy = $state(false);
 	let refreshing = $state(false);
 	// Which Summon control is mid-flight: '' = idle, 'tab' = header, else a list
 	// key. Only one at a time — the worker pool serialises device tasks anyway.
@@ -290,8 +310,19 @@
 		]);
 	}
 
+	async function loadAccount(target: string) {
+		accounts = null;
+		accountsErr = '';
+		await safe(() => accountInfo(target), (v) => (accounts = v.accounts), (e) => (accountsErr = e));
+	}
+
 	async function loadDetails(target: string) {
-		await Promise.all([loadOverview(target), loadOptical(target), loadWifi(target)]);
+		await Promise.all([
+			loadOverview(target),
+			loadOptical(target),
+			loadWifi(target),
+			loadAccount(target)
+		]);
 	}
 
 	async function refreshAll() {
@@ -420,6 +451,7 @@
 		if (tab === 'overview') await loadOverview(ip);
 		else if (tab === 'optical') await loadOptical(ip);
 		else if (tab === 'wifi') await loadWifi(ip);
+		else if (tab === 'account') await loadAccount(ip);
 	}
 
 	async function reloadSummonList(key: string, target: string) {
@@ -449,6 +481,9 @@
 				await safe(() => wifiClients(target), (v) => (clients = v.clients), (e) => (clientsErr = e));
 				await safe(() => dhcpClients(target), (v) => (leases = v), (e) => (leasesErr = e));
 				break;
+			case 'account':
+				await loadAccount(target);
+				break;
 		}
 	}
 
@@ -463,6 +498,76 @@
 			toast.error(`PPPoE update failed: ${errMessage(e)}`);
 		} finally {
 			pppoeBusy = false;
+		}
+	}
+
+	function accountKey(a: AccountEntry): string {
+		return `${a.vendor}|${a.label}|${a.path}`;
+	}
+
+	/** Row as currently displayed: server value unless locally overridden. */
+	function shownAccount(a: AccountEntry): AccountEntry {
+		const o = accountEnabled[accountKey(a)];
+		return o === undefined || o === a.enabled ? a : { ...a, enabled: o };
+	}
+
+	function toggleAccountPassword(a: AccountEntry) {
+		const key = accountKey(a);
+		revealedAccounts = { ...revealedAccounts, [key]: !revealedAccounts[key] };
+	}
+
+	async function toggleAccountEnabled(a: AccountEntry, next: boolean) {
+		if (!ip) return;
+		const key = accountKey(a);
+		accountToggling = { ...accountToggling, [key]: true };
+		try {
+			await updateAccount(ip, { path: a.path, label: a.label, enabled: next });
+			accountEnabled = { ...accountEnabled, [key]: next };
+			toast.success(
+				`${a.label} ${next ? 'enabled' : 'disabled'} — applied now if the CPE responds, else on its next inform (~30s).`
+			);
+		} catch (e) {
+			toast.error(`${a.label} ${next ? 'enable' : 'disable'} failed: ${errMessage(e)}`);
+		} finally {
+			accountToggling = { ...accountToggling, [key]: false };
+		}
+	}
+
+	function openAccountEditor(a: AccountEntry) {
+		editingAccount = a;
+		accountDraftUser = a.username ?? '';
+		accountDraftPass = '';
+		accountDraftEnabled = shownAccount(a).enabled;
+		accountEditorOpen = true;
+	}
+
+	async function saveAccountEditor() {
+		const a = editingAccount;
+		if (!ip || !a) return;
+		const body: Parameters<typeof updateAccount>[1] = { path: a.path, label: a.label };
+		const user = accountDraftUser.trim();
+		if (user && user !== (a.username ?? '')) body.username = user;
+		if (accountDraftPass) body.password = accountDraftPass;
+		const current = shownAccount(a).enabled;
+		if (accountDraftEnabled !== undefined && accountDraftEnabled !== current) {
+			body.enabled = accountDraftEnabled;
+		}
+		if (body.username === undefined && body.password === undefined && body.enabled === undefined) {
+			accountEditorOpen = false;
+			return;
+		}
+		accountEditorBusy = true;
+		try {
+			await updateAccount(ip, body);
+			if (body.enabled !== undefined) {
+				accountEnabled = { ...accountEnabled, [accountKey(a)]: body.enabled };
+			}
+			toast.success(`${a.label} updated. The CPE applies the change within ~30s.`);
+			accountEditorOpen = false;
+		} catch (e) {
+			toast.error(`Account update failed: ${errMessage(e)}`);
+		} finally {
+			accountEditorBusy = false;
 		}
 	}
 </script>
@@ -521,6 +626,7 @@
 				<Tabs.Trigger value="overview">Overview</Tabs.Trigger>
 				<Tabs.Trigger value="optical">Optical</Tabs.Trigger>
 				<Tabs.Trigger value="wifi">WiFi &amp; LAN</Tabs.Trigger>
+				<Tabs.Trigger value="account">Account</Tabs.Trigger>
 				<Tabs.Trigger value="actions">Actions</Tabs.Trigger>
 			</Tabs.List>
 
@@ -983,6 +1089,124 @@
 				</Card.Root>
 			</Tabs.Content>
 
+			<Tabs.Content value="account" class="flex flex-col gap-4">
+				<Card.Root>
+					<Card.Header>
+						<div class="flex items-start justify-between gap-2">
+							<div>
+								<Card.Title>Router accounts</Card.Title>
+								<Card.Description>
+									Web login accounts this CPE exposes, across the ZTE, Huawei, FiberHome, and
+									TR-098 account trees.
+								</Card.Description>
+							</div>
+							{@render SummonButton({ key: 'account', paths: LIST_SCOPE.account, reload: 'account' })}
+						</div>
+					</Card.Header>
+					<Card.Content>
+						{#if accountsErr}
+							<Alert variant="destructive">
+								<TriangleAlertIcon />
+								<AlertTitle>Failed to read router accounts</AlertTitle>
+								<AlertDescription>{accountsErr}</AlertDescription>
+							</Alert>
+						{:else if accounts === null}
+							<Skeleton class="h-16 w-full" />
+						{:else if accounts.length === 0}
+							{@render EmptyState({
+								title: 'No router accounts',
+								description: 'This CPE does not expose a known router login account.'
+							})}
+						{:else}
+							<div class="overflow-x-auto">
+								<Table.Root>
+									<Table.Header>
+										<Table.Row>
+											<Table.Head>Account</Table.Head>
+											<Table.Head>Username</Table.Head>
+											<Table.Head>Password</Table.Head>
+											<Table.Head>Enabled</Table.Head>
+											<Table.Head class="text-right">Actions</Table.Head>
+										</Table.Row>
+									</Table.Header>
+									<Table.Body>
+										{#each accounts as a (accountKey(a))}
+											<Table.Row>
+												<Table.Cell>
+													<p class="font-medium">{a.label}</p>
+													<p class="text-muted-foreground max-w-96 truncate text-xs" title={a.path}>
+														{a.vendor} · {a.path}
+													</p>
+												</Table.Cell>
+												<Table.Cell class="font-mono text-xs">{a.username || '—'}</Table.Cell>
+												<Table.Cell>
+													<div class="flex items-center gap-1">
+														<span class="font-mono text-xs">
+															{a.password
+																? revealedAccounts[accountKey(a)]
+																	? a.password
+																	: '••••••••'
+																: '—'}
+														</span>
+														{#if a.password}
+															<Button
+																variant="ghost"
+																size="icon-sm"
+																aria-label={revealedAccounts[accountKey(a)]
+																	? 'Hide password'
+																	: 'Show password'}
+																onclick={() => toggleAccountPassword(a)}
+															>
+																{#if revealedAccounts[accountKey(a)]}
+																	<EyeOffIcon />
+																{:else}
+																	<EyeIcon />
+																{/if}
+															</Button>
+														{/if}
+													</div>
+												</Table.Cell>
+												<Table.Cell>
+													{#if shownAccount(a).enabled === undefined}
+														<span class="text-muted-foreground">—</span>
+													{:else}
+														<Switch
+															checked={shownAccount(a).enabled}
+															disabled={!ip || accountToggling[accountKey(a)]}
+															onCheckedChange={(v) => toggleAccountEnabled(a, v)}
+															aria-label={`Toggle ${a.label}`}
+														/>
+													{/if}
+												</Table.Cell>
+												<Table.Cell class="text-right">
+													<div class="flex items-center justify-end gap-1">
+														<Button
+															variant="ghost"
+															size="icon-sm"
+															aria-label={`Edit ${a.label}`}
+															onclick={() => openAccountEditor(a)}
+														>
+															<PencilIcon />
+														</Button>
+														{@render SummonButton({
+															key: `account-${accountKey(a)}`,
+															paths: [a.path],
+															reload: 'account',
+															icon: true
+														})}
+													</div>
+												</Table.Cell>
+											</Table.Row>
+										{/each}
+									</Table.Body>
+								</Table.Root>
+							</div>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+
+				</Tabs.Content>
+
 			<Tabs.Content value="actions" class="flex flex-col gap-4">
 				<div class="grid gap-4 lg:grid-cols-2">
 					<Card.Root>
@@ -1108,6 +1332,66 @@
 					}}
 				/>
 			{/if}
+		</div>
+	</Sheet.Content>
+</Sheet.Root>
+
+<Sheet.Root bind:open={accountEditorOpen}>
+	<Sheet.Content side="right" class="w-full overflow-y-auto sm:max-w-md">
+		<Sheet.Header>
+			<Sheet.Title>Edit {editingAccount?.label ?? 'account'}</Sheet.Title>
+			<Sheet.Description>
+				{editingAccount ? `${editingAccount.vendor} · ${editingAccount.path}` : ''}
+			</Sheet.Description>
+		</Sheet.Header>
+		<div class="px-4 pb-4">
+			<form
+				class="flex flex-col gap-4"
+				onsubmit={(e) => {
+					e.preventDefault();
+					saveAccountEditor();
+				}}
+			>
+				<Field.FieldGroup>
+					<Field.Field>
+						<Field.FieldLabel for="edit-account-user">Username</Field.FieldLabel>
+						<Input
+							id="edit-account-user"
+							bind:value={accountDraftUser}
+							placeholder="admin"
+							disabled={accountEditorBusy}
+						/>
+					</Field.Field>
+					<Field.Field>
+						<Field.FieldLabel for="edit-account-pass">New password</Field.FieldLabel>
+						<Input
+							id="edit-account-pass"
+							type="password"
+							bind:value={accountDraftPass}
+							placeholder="••••••••"
+							disabled={accountEditorBusy}
+						/>
+						<p class="text-muted-foreground text-xs">Leave empty to keep the current password.</p>
+					</Field.Field>
+					{#if accountDraftEnabled !== undefined}
+						<Field.Field>
+							<Field.FieldLabel for="edit-account-enabled">Enabled</Field.FieldLabel>
+							<Switch
+								id="edit-account-enabled"
+								checked={accountDraftEnabled}
+								onCheckedChange={(v) => (accountDraftEnabled = v)}
+								disabled={accountEditorBusy}
+							/>
+						</Field.Field>
+					{/if}
+				</Field.FieldGroup>
+				<Button type="submit" disabled={accountEditorBusy || !ip}>
+					{#if accountEditorBusy}
+						<Spinner data-icon="inline-start" />
+					{/if}
+					Save changes
+				</Button>
+			</form>
 		</div>
 	</Sheet.Content>
 </Sheet.Root>

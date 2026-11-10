@@ -20,4 +20,7 @@ const (
 	// Not Implemented (not 400/404) because the request is valid but
 	// the feature is unimplemented for this specific device.
 	ErrCodeQoSUnsupported = "QOS_UNSUPPORTED_BY_DEVICE"
+	// Account-specific: the CPE exposes none of the known router web login
+	// parameter trees, so there is nothing to read or write.
+	ErrCodeAccountUnsupported = "ACCOUNT_NOT_SUPPORTED"
 )

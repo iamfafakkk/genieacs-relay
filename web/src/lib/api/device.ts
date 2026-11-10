@@ -5,6 +5,7 @@
  */
 import { api } from '$lib/api/client';
 import type {
+	AccountResponse,
 	DeviceCapability,
 	DeviceStatus,
 	DHCPClient,
@@ -141,6 +142,28 @@ export function dhcpClients(ip: string, refresh = false): Promise<DHCPClient[]> 
 	});
 }
 
+/** Router web login accounts across the ZTE, Huawei, FiberHome, and TR-098 trees. */
+export function accountInfo(ip: string): Promise<AccountResponse> {
+	return api(`/api/v1/genieacs/account/${encodeURIComponent(ip)}`);
+}
+
+export interface AccountUpdateBody {
+	/** Set for a single-account update; omit to write every detected tree. */
+	path?: string;
+	label?: string;
+	username?: string;
+	password?: string;
+	enabled?: boolean;
+}
+
+/** Update one account (path+label) or every detected account tree. */
+export function updateAccount(ip: string, body: AccountUpdateBody): Promise<MessageResponse> {
+	return api(`/api/v1/genieacs/account/${encodeURIComponent(ip)}`, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
 // --- Actions (TR-069 tasks) ---
 
 export function rebootDevice(ip: string): Promise<MessageResponse> {
@@ -158,7 +181,13 @@ export const LIST_SCOPE = {
 	wan: ['InternetGatewayDevice.WANDevice'],
 	optical: ['InternetGatewayDevice.WANDevice.1'],
 	wlan: ['InternetGatewayDevice.LANDevice.1.WLANConfiguration'],
-	hosts: ['InternetGatewayDevice.LANDevice.1.Hosts']
+	hosts: ['InternetGatewayDevice.LANDevice.1.Hosts'],
+	account: [
+		'InternetGatewayDevice.UserInterface',
+		'InternetGatewayDevice.X_ZTE-COM_UserInterface',
+		'InternetGatewayDevice.DeviceInfo.X_FH_Account',
+		'InternetGatewayDevice.User'
+	]
 } as const;
 
 /** Header Summon refreshes every list on the active tab in one task. */
@@ -166,6 +195,7 @@ export const TAB_SCOPE: Record<string, readonly string[]> = {
 	overview: [...LIST_SCOPE.deviceInfo, ...LIST_SCOPE.wan],
 	optical: LIST_SCOPE.optical,
 	wifi: [...LIST_SCOPE.wlan, ...LIST_SCOPE.hosts],
+	account: LIST_SCOPE.account,
 	actions: LIST_SCOPE.deviceInfo
 };
 

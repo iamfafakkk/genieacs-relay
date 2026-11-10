@@ -129,6 +129,8 @@ func setupTestServer(t *testing.T, mockHandler http.Handler) (*httptest.Server, 
 		r.Delete("/wan/{type}/{wan_device}/{connection_device}/{instance}/{ip}", deleteWANConnectionHandler)
 		r.Post("/params/{ip}", getGenericParamsHandler)
 		r.Put("/pppoe/{ip}", setPPPoECredentialsHandler)
+		r.Get("/account/{ip}", getAccountHandler)
+		r.Put("/account/{ip}", setAccountHandler)
 		r.Post("/firmware/{ip}", firmwareUpgradeHandler)
 		// v2.2.0 Phase 3 (MEDIUM)
 		r.Put("/qos/{ip}", setQoSHandler)

@@ -103,6 +103,23 @@ export interface DeviceCapability {
 	is_dual_band?: boolean;
 	description?: string;
 }
+/** One router web login account parsed from a vendor account parameter tree. */
+export interface AccountEntry {
+	/** Vendor family the values came from, e.g. "ZTE", "Huawei", "FiberHome", "TR-098". */
+	vendor: string;
+	/** Role within that tree, e.g. "Admin", "User", "Account 2". */
+	label: string;
+	/** Concrete TR-069 object path, for tracing values back to the device tree. */
+	path: string;
+	enabled?: boolean;
+	username?: string;
+	password?: string;
+}
+export interface AccountResponse {
+	device_id: string;
+	ip?: string;
+	accounts: AccountEntry[];
+}
 
 export interface WLANConfig {
 	wlan: string;
