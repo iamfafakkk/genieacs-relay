@@ -168,6 +168,56 @@
 		}
 	}
 
+	type ConnectedClient = {
+		mac: string;
+		hostname?: string;
+		ip?: string;
+		ssid?: string;
+		band?: string;
+		wlan?: number;
+	};
+
+	function normMac(mac: string): string {
+		return mac.toLowerCase().replace(/[^0-9a-f]/g, '');
+	}
+
+	function mergeConnectedClients(
+		wifi: WiFiClient[] | null,
+		dhcp: DHCPClient[] | null
+	): ConnectedClient[] | null {
+		if (wifi === null && dhcp === null) return null;
+		const byMac = new Map<string, ConnectedClient>();
+		for (const l of dhcp ?? []) {
+			byMac.set(normMac(l.mac), { mac: l.mac, hostname: l.hostname, ip: l.ip });
+		}
+		for (const c of wifi ?? []) {
+			const key = normMac(c.mac);
+			const row = byMac.get(key);
+			if (row) {
+				row.ssid = c.ssid;
+				row.band = c.band;
+				row.wlan = c.wlan;
+			} else {
+				byMac.set(key, { mac: c.mac, ssid: c.ssid, band: c.band, wlan: c.wlan });
+			}
+		}
+		return [...byMac.values()].sort((a, b) => {
+			if (a.ip && b.ip) return a.ip.localeCompare(b.ip, undefined, { numeric: true });
+			if (a.ip) return -1;
+			if (b.ip) return 1;
+			return a.mac.localeCompare(b.mac);
+		});
+	}
+
+	function summonPathsForClient(row: ConnectedClient): readonly string[] {
+		const paths: string[] = [];
+		if (row.wlan != null) paths.push(...rowScopes.wifiClient({ wlan: row.wlan }));
+		if (row.ip || row.hostname || row.wlan == null) paths.push(...rowScopes.dhcpLease());
+		return paths;
+	}
+
+	const connectedClients = $derived(mergeConnectedClients(clients, leases));
+
 	async function safe<T>(fn: () => Promise<T>, apply: (v: T) => void, setErr: (e: string) => void) {
 		try {
 			apply(await fn());
@@ -265,6 +315,18 @@
 		await runAction('DHCP refresh', async () => {
 			await dhcpClients(ip, true);
 			leases = await dhcpClients(ip);
+		});
+	}
+
+	async function refreshConnectedClients() {
+		if (!ip) return;
+		await runAction('Connected clients refresh', async () => {
+			await dhcpClients(ip, true);
+			const [dhcp, wifi] = await Promise.all([dhcpClients(ip), wifiClients(ip)]);
+			leases = dhcp;
+			clients = wifi.clients;
+			clientsErr = '';
+			leasesErr = '';
 		});
 	}
 
@@ -381,6 +443,10 @@
 				await safe(() => wifiClients(target), (v) => (clients = v.clients), (e) => (clientsErr = e));
 				break;
 			case 'hosts':
+				await safe(() => dhcpClients(target), (v) => (leases = v), (e) => (leasesErr = e));
+				break;
+			case 'connected':
+				await safe(() => wifiClients(target), (v) => (clients = v.clients), (e) => (clientsErr = e));
 				await safe(() => dhcpClients(target), (v) => (leases = v), (e) => (leasesErr = e));
 				break;
 		}
@@ -794,15 +860,12 @@
 					</Card.Content>
 				</Card.Root>
 
-				<div class="grid gap-4 lg:grid-cols-2">
-					<Card.Root>
-						<Card.Header>
-							<div class="flex items-center justify-between gap-2">
-								<Card.Title>Radio statistics</Card.Title>
-							</div>
-						</Card.Header>
-						<Card.Content>
-							{#if radioStats === null}
+				<Card.Root>
+					<Card.Header>
+						<Card.Title>Radio statistics</Card.Title>
+					</Card.Header>
+					<Card.Content>
+						{#if radioStats === null}
 								<Skeleton class="h-16 w-full" />
 							{:else if radioStats.length === 0}
 								{@render EmptyState({ title: 'No radios', description: 'No radio statistics reported.' })}
@@ -836,88 +899,51 @@
 										{/each}
 									</Table.Body>
 								</Table.Root>
-							{/if}
-						</Card.Content>
-					</Card.Root>
-
-					<Card.Root>
-						<Card.Header>
-							<div class="flex items-center justify-between gap-2">
-								<Card.Title>Wireless clients</Card.Title>
-							</div>
-						</Card.Header>
-						<Card.Content>
-							{#if clientsErr}
-								<Alert variant="destructive">
-									<TriangleAlertIcon />
-									<AlertTitle>Failed to read wireless clients</AlertTitle>
-									<AlertDescription>{clientsErr}</AlertDescription>
-								</Alert>
-							{:else if clients === null}
-								<Skeleton class="h-16 w-full" />
-							{:else if clients.length === 0}
-								{@render EmptyState({ title: 'No wireless clients', description: 'No devices are associated to the wireless network.' })}
-							{:else}
-								<Table.Root>
-									<Table.Header>
-										<Table.Row>
-											<Table.Head>MAC</Table.Head>
-											<Table.Head>SSID</Table.Head>
-											<Table.Head>Band</Table.Head>
-											<Table.Head class="text-right">Actions</Table.Head>
-										</Table.Row>
-									</Table.Header>
-									<Table.Body>
-										{#each clients as c (c.mac + c.wlan)}
-											<Table.Row>
-												<Table.Cell class="font-mono text-xs">{c.mac}</Table.Cell>
-												<Table.Cell>{c.ssid ?? '—'}</Table.Cell>
-												<Table.Cell>{c.band ?? '—'}</Table.Cell>
-												<Table.Cell class="text-right">
-													{@render SummonButton({
-														key: `client-${c.mac}`,
-														paths: rowScopes.wifiClient(c),
-														reload: 'clients',
-														icon: true
-													})}
-												</Table.Cell>
-											</Table.Row>
-										{/each}
-									</Table.Body>
-								</Table.Root>
-							{/if}
-						</Card.Content>
-					</Card.Root>
-				</div>
+						{/if}
+					</Card.Content>
+				</Card.Root>
 
 				<Card.Root>
 					<Card.Header>
 						<div class="flex items-center justify-between gap-2">
 							<div>
-								<Card.Title>DHCP leases</Card.Title>
-								<Card.Description>Clients that obtained an address from the CPE.</Card.Description>
+								<Card.Title>Connected clients</Card.Title>
+								<Card.Description>
+									Wireless associations merged with DHCP leases on the same MAC.
+								</Card.Description>
 							</div>
-							<Button
-								variant="outline"
-								size="sm"
-								onclick={refreshDHCP}
-							>
+							<Button variant="outline" size="sm" onclick={refreshConnectedClients}>
 								<RotateCwIcon data-icon="inline-start" />
 								Refresh from CPE
 							</Button>
 						</div>
 					</Card.Header>
-					<Card.Content>
-						{#if leasesErr}
-							<Alert variant="destructive">
-								<TriangleAlertIcon />
-								<AlertTitle>Failed to read DHCP leases</AlertTitle>
-								<AlertDescription>{leasesErr}</AlertDescription>
-							</Alert>
-						{:else if leases === null}
+					<Card.Content class="flex flex-col gap-3">
+						{#if clientsErr || leasesErr}
+							<div class="flex flex-col gap-2">
+								{#if clientsErr}
+									<Alert variant="destructive">
+										<TriangleAlertIcon />
+										<AlertTitle>Failed to read wireless clients</AlertTitle>
+										<AlertDescription>{clientsErr}</AlertDescription>
+									</Alert>
+								{/if}
+								{#if leasesErr}
+									<Alert variant="destructive">
+										<TriangleAlertIcon />
+										<AlertTitle>Failed to read DHCP leases</AlertTitle>
+										<AlertDescription>{leasesErr}</AlertDescription>
+									</Alert>
+								{/if}
+							</div>
+						{/if}
+						{#if connectedClients === null && !clientsErr && !leasesErr}
 							<Skeleton class="h-16 w-full" />
-						{:else if leases.length === 0}
-							{@render EmptyState({ title: 'No DHCP leases', description: 'The CPE reports no DHCP clients.' })}
+						{:else if (connectedClients?.length ?? 0) === 0}
+							{@render EmptyState({
+								title: 'No connected clients',
+								description: 'No wireless associations or DHCP leases reported on this CPE.'
+							})}
 						{:else}
 							<div class="overflow-x-auto">
 								<Table.Root>
@@ -926,20 +952,24 @@
 											<Table.Head>MAC</Table.Head>
 											<Table.Head>Hostname</Table.Head>
 											<Table.Head>IP</Table.Head>
+											<Table.Head>SSID</Table.Head>
+											<Table.Head>Band</Table.Head>
 											<Table.Head class="text-right">Actions</Table.Head>
 										</Table.Row>
 									</Table.Header>
 									<Table.Body>
-										{#each leases as l (l.mac + l.ip)}
+										{#each connectedClients ?? [] as row (row.mac + (row.ip ?? '') + (row.wlan ?? ''))}
 											<Table.Row>
-												<Table.Cell class="font-mono text-xs">{l.mac}</Table.Cell>
-												<Table.Cell>{l.hostname || '—'}</Table.Cell>
-												<Table.Cell class="font-mono text-xs">{l.ip}</Table.Cell>
+												<Table.Cell class="font-mono text-xs">{row.mac}</Table.Cell>
+												<Table.Cell>{row.hostname || '—'}</Table.Cell>
+												<Table.Cell class="font-mono text-xs">{row.ip ?? '—'}</Table.Cell>
+												<Table.Cell>{row.ssid ?? '—'}</Table.Cell>
+												<Table.Cell>{row.band ?? '—'}</Table.Cell>
 												<Table.Cell class="text-right">
 													{@render SummonButton({
-														key: `lease-${l.mac}`,
-														paths: rowScopes.dhcpLease(),
-														reload: 'hosts',
+														key: `connected-${row.mac}`,
+														paths: summonPathsForClient(row),
+														reload: 'connected',
 														icon: true
 													})}
 												</Table.Cell>
