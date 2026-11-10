@@ -8,6 +8,7 @@
 #   --api-only     Skip admin UI build (API only, no web/dist)
 #   --no-start     Install and enable unit but do not start the service
 #   --no-enable    Install files only (no systemctl enable/start)
+#   --no-firewall  Skip UFW (OpenSSH + SERVER_ADDR port)
 #   -h, --help     Show usage
 #
 # Interactive config (or set env vars for CI/non-TTY):
@@ -35,6 +36,7 @@ UNIT_SRC="${SYSTEMD_DIR}/${SERVICE_NAME}.service"
 BUILD_WEB=1
 DO_START=1
 DO_ENABLE=1
+CONFIGURE_FIREWALL=1
 
 usage() {
   sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
@@ -44,9 +46,20 @@ log() { echo -e "${GREEN}==>${NC} $*"; }
 warn() { echo -e "${YELLOW}warning:${NC} $*"; }
 die() { echo -e "${RED}error:${NC} $*" >&2; exit 1; }
 
+# Systemd EnvironmentFile: satu baris KEY=VALUE, tanpa newline di value.
+sanitize_env_value() {
+  local v="$1"
+  v="${v//$'\r'/}"
+  v="${v//$'\n'/}"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
+}
+
 # Replace or append KEY=VALUE in a systemd EnvironmentFile (safe for special chars).
 set_env_kv() {
   local file="$1" key="$2" value="$3"
+  value="$(sanitize_env_value "$value")"
   awk -v k="$key" -v v="$value" '
     BEGIN { found = 0 }
     $0 ~ "^" k "=" { print k "=" v; found = 1; next }
@@ -121,11 +134,27 @@ configure_env_secrets() {
   fi
 }
 
+validate_env_for_service() {
+  local env_file="$1"
+  if nbi_auth_enabled_in_env "$env_file" && nbi_key_needs_input "$env_file"; then
+    die "NBI_AUTH_KEY kosong di ${env_file} — systemd tidak bisa parse baris terpisah; isi ulang: sudo ./install.sh"
+  fi
+  if ! awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*$/ { next }
+    /=/{ next }
+    { exit 1 }
+  ' "$env_file"; then
+    die "ada baris tidak valid di ${env_file} (harus KEY=VALUE atau komentar #)"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --api-only) BUILD_WEB=0 ;;
     --no-start) DO_START=0 ;;
     --no-enable) DO_ENABLE=0; DO_START=0 ;;
+    --no-firewall) CONFIGURE_FIREWALL=0 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
   esac
@@ -345,12 +374,56 @@ install_files() {
   fi
   chmod 0640 "${CONFIG_DIR}/env"
   chown root:"$SERVICE_USER" "${CONFIG_DIR}/env"
+  validate_env_for_service "${CONFIG_DIR}/env"
 }
 
 install_systemd_unit() {
   log "installing systemd unit"
   install -m 0644 "$UNIT_SRC" "/etc/systemd/system/${SERVICE_NAME}.service"
   systemctl daemon-reload
+}
+
+server_listen_port() {
+  local addr port
+  addr="$(env_file_get "${CONFIG_DIR}/env" SERVER_ADDR)"
+  addr="${addr:-:8080}"
+  if [[ "$addr" == *:* ]]; then
+    port="${addr##*:}"
+  else
+    port="$addr"
+  fi
+  port="${port//[^0-9]/}"
+  [[ -n "$port" ]] || port=8080
+  echo "$port"
+}
+
+configure_firewall() {
+  [[ "$CONFIGURE_FIREWALL" -eq 1 ]] || return 0
+
+  if ! command -v ufw >/dev/null 2>&1; then
+    warn "ufw tidak terpasang — lewati firewall (apt install ufw jika perlu)"
+    return 0
+  fi
+
+  if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
+    warn "firewalld aktif — buka port manual; install.sh hanya otomatis untuk ufw"
+    return 0
+  fi
+
+  local port
+  port="$(server_listen_port)"
+  log "ufw: OpenSSH + ${port}/tcp (genieacs-relay), lalu enable"
+
+  ufw allow OpenSSH >/dev/null
+  ufw allow "${port}/tcp" comment "genieacs-relay API+admin" >/dev/null
+
+  if ufw status 2>/dev/null | grep -qE '^Status: active'; then
+    ufw reload >/dev/null
+  else
+    ufw --force enable
+  fi
+
+  ufw status verbose | sed -n '1,12p'
 }
 
 enable_and_start() {
@@ -403,6 +476,7 @@ main() {
   build_binary
   install_files
   install_systemd_unit
+  configure_firewall
   enable_and_start
   echo ""
   echo "Useful commands:"
