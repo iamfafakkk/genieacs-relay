@@ -351,6 +351,15 @@ func runServer(addr string) error {
 		r.Put("/wlan/optimize/{wlan}/{ip}", optimizeWLANHandler)
 	})
 
+	// Admin UI on the same port as the API. Registered last so it only catches
+	// what the API, probes, metrics and Swagger routes did not claim.
+	if ui := newUIHandler(webDistDir); ui != nil {
+		r.Handle("/*", ui)
+	} else {
+		logger.Info("Admin UI not built, serving API only",
+			zap.String("dist_dir", webDistDir), zap.String("build_cmd", "make web-build"))
+	}
+
 	// server
 	server := newHTTPServer(serverAddr, r)
 

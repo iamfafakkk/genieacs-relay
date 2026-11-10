@@ -12,7 +12,7 @@ GO_COVER_FLAGS  := -coverprofile=coverage.out -covermode=atomic
 BIN_DIR         := bin
 TEST_DIR        := test-results
 
-.PHONY: all setup env-copy build run dev test test-race test-coverage test-html clean \
+.PHONY: all setup env-copy build run dev web-build web-dev test test-race test-coverage test-html clean \
         up down logs \
         prod-up prod-down logs-prod \
         docker-build docker-push \
@@ -64,6 +64,16 @@ dev:
 	command -v air >/dev/null 2>&1 || \
 		{ echo "air not found. Install: go install github.com/air-verse/air@latest"; exit 1; }; \
 	air -c .air.toml
+
+## web-build: Build the admin UI into web/dist (served by the Go binary on SERVER_ADDR)
+web-build:
+	@echo ">> Building admin UI into web/dist..."
+	pnpm --dir web build
+
+## web-dev: Run the admin UI dev server (Vite, port 5173) with API proxy to the backend
+web-dev:
+	@echo ">> Starting admin UI dev server..."
+	pnpm --dir web dev
 
 # Testing
 ## test: Run all tests
