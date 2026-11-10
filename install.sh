@@ -148,28 +148,99 @@ fi
 [[ -f "$UNIT_SRC" ]] || die "missing ${UNIT_SRC}"
 [[ -f "$ENV_EXAMPLE" ]] || die "missing ${ENV_EXAMPLE}"
 
-require_go() {
-  if ! command -v go >/dev/null 2>&1; then
-    cat >&2 <<'EOF'
-Go is not installed. Install Go 1.22+ (toolchain auto-upgrade preferred), then re-run.
+readonly GO_INSTALL_ROOT="/usr/local"
+readonly GO_PROFILE_SNIPPET="/etc/profile.d/genieacs-relay-go.sh"
 
-  https://go.dev/dl/
+go_mod_version() {
+  grep '^go ' "${REPO_ROOT}/go.mod" | awk '{print $2}'
+}
 
-On Debian/Ubuntu you can also try: apt install golang-go
+go_linux_arch() {
+  case "$(uname -m)" in
+    x86_64) echo "amd64" ;;
+    aarch64) echo "arm64" ;;
+    armv7l) echo "armv6l" ;;
+    *) die "unsupported CPU for Go install: $(uname -m)" ;;
+  esac
+}
+
+export_go_path() {
+  export PATH="${GO_INSTALL_ROOT}/go/bin:${PATH}"
+  export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
+}
+
+write_go_profile_snippet() {
+  cat >"$GO_PROFILE_SNIPPET" <<'EOF'
+# Added by genieacs-relay install.sh (official Go tarball from go.dev)
+export PATH=/usr/local/go/bin:$PATH
+export GOTOOLCHAIN=auto
 EOF
-    exit 1
+  chmod 0644 "$GO_PROFILE_SNIPPET"
+}
+
+ensure_download_tools() {
+  local missing=()
+  command -v curl >/dev/null 2>&1 || missing+=(curl)
+  command -v tar >/dev/null 2>&1 || missing+=(tar)
+  [[ ${#missing[@]} -eq 0 ]] && return 0
+  if command -v apt-get >/dev/null 2>&1; then
+    log "installing ${missing[*]} (bukan golang — hanya untuk unduh Go)"
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates "${missing[@]}"
+    return 0
   fi
-  if ! go version | grep -qE 'go1\.(2[2-9]|[3-9][0-9])'; then
-    warn "Go version may be older than go.mod; export GOTOOLCHAIN=auto or upgrade Go"
+  die "butuh: ${missing[*]} (untuk unduh Go dari go.dev)"
+}
+
+install_go_from_go_dev() {
+  local version arch tarball url tmp
+  version="$(go_mod_version)"
+  [[ -n "$version" ]] || version="1.22.0"
+  arch="$(go_linux_arch)"
+  tarball="go${version}.linux-${arch}.tar.gz"
+  url="https://go.dev/dl/${tarball}"
+
+  ensure_download_tools
+  log "mengunduh Go ${version} (curl, bukan apt): ${url}"
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL "$url" -o "${tmp}/${tarball}"; then
+    rm -rf "$tmp"
+    die "gagal unduh ${url} — cek versi di go.mod atau koneksi internet"
   fi
+
+  log "memasang Go ke ${GO_INSTALL_ROOT}/go"
+  rm -rf "${GO_INSTALL_ROOT}/go"
+  tar -C "$GO_INSTALL_ROOT" -xzf "${tmp}/${tarball}"
+  rm -rf "$tmp"
+
+  write_go_profile_snippet
+  export_go_path
+  hash -r 2>/dev/null || true
+  command -v go >/dev/null 2>&1 || die "Go terpasang tapi tidak ada di PATH"
+  log "$(go version)"
+}
+
+ensure_go() {
+  export_go_path
+  if command -v go >/dev/null 2>&1; then
+    log "$(go version)"
+    return 0
+  fi
+  if [[ -x "${GO_INSTALL_ROOT}/go/bin/go" ]]; then
+    export_go_path
+    log "$(go version)"
+    return 0
+  fi
+  install_go_from_go_dev
 }
 
 install_build_deps() {
+  ensure_download_tools
   if command -v apt-get >/dev/null 2>&1; then
-    if ! dpkg -s git ca-certificates >/dev/null 2>&1; then
-      log "installing git, ca-certificates (apt)"
+    if ! dpkg -s git >/dev/null 2>&1; then
+      log "installing git (apt)"
       apt-get update -qq
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git
     fi
   fi
 }
@@ -324,7 +395,7 @@ wait_for_health() {
 
 main() {
   echo -e "${GREEN}=== GenieACS Relay installer ===${NC}"
-  require_go
+  ensure_go
   install_build_deps
   ensure_service_user
   ensure_node_for_web

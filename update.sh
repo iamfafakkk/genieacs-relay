@@ -54,6 +54,14 @@ trap 'if [[ "$SERVICE_WAS_RUNNING" -eq 1 ]]; then systemctl start "$SERVICE" >/d
 
 cd "$APP_DIR"
 
+# Same Go as install.sh (/usr/local/go via go.dev tarball)
+export PATH="/usr/local/go/bin:${PATH}"
+export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
+if ! command -v go >/dev/null 2>&1; then
+  echo "error: Go not found — run sudo ./install.sh (installs Go via curl from go.dev)" >&2
+  exit 1
+fi
+
 echo "==> [1/6] git pull"
 git pull --ff-only
 
