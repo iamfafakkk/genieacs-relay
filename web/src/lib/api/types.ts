@@ -177,6 +177,27 @@ export interface MessageResponse {
 	message: string;
 }
 
+// --- GenieACS scripts (provisions + virtual parameters, mirrored from handlers_provisions.go) ---
+
+/** One provision or virtual parameter script. */
+export interface ScriptEntry {
+	name: string;
+	script: string;
+}
+
+export interface ProvisionsResponse {
+	provisions: ScriptEntry[];
+}
+
+export interface VirtualParametersResponse {
+	virtual_parameters: ScriptEntry[];
+}
+
+export interface ScriptOperationResponse {
+	message: string;
+	name: string;
+}
+
 export interface VersionResponse {
 	version: string;
 	commit: string;

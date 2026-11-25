@@ -4,6 +4,8 @@
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
+	import FileCodeIcon from '@lucide/svelte/icons/file-code-2';
+	import VariableIcon from '@lucide/svelte/icons/variable';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
@@ -14,6 +16,11 @@
 		{ title: 'Dashboard', url: '/', icon: LayoutDashboardIcon },
 		{ title: 'Devices', url: '/devices', icon: GaugeIcon },
 		{ title: 'Jobs', url: '/jobs', icon: ListChecksIcon }
+	];
+
+	const configItems = [
+		{ title: 'Provisions', url: '/provisions', icon: FileCodeIcon },
+		{ title: 'Virtual Parameters', url: '/virtual-parameters', icon: VariableIcon }
 	];
 
 	// Device detail pages keep the Devices entry highlighted.
@@ -73,6 +80,29 @@
 							{#if item.url === '/jobs' && jobsState.active > 0}
 								<Sidebar.MenuBadge>{jobsState.active}</Sidebar.MenuBadge>
 							{/if}
+						</Sidebar.MenuItem>
+					{/each}
+				</Sidebar.Menu>
+			</Sidebar.GroupContent>
+		</Sidebar.Group>
+
+		<Sidebar.Group>
+			<Sidebar.GroupLabel>GenieACS</Sidebar.GroupLabel>
+			<Sidebar.GroupContent>
+				<Sidebar.Menu>
+					{#each configItems as item (item.url)}
+						<Sidebar.MenuItem>
+							<Sidebar.MenuButton
+								isActive={isActive(item.url, page.url.pathname)}
+								tooltipContent={item.title}
+							>
+								{#snippet child({ props })}
+									<a href={item.url} {...props}>
+										<item.icon />
+										<span>{item.title}</span>
+									</a>
+								{/snippet}
+							</Sidebar.MenuButton>
 						</Sidebar.MenuItem>
 					{/each}
 				</Sidebar.Menu>

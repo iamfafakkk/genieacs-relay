@@ -407,7 +407,13 @@ const (
 	ErrPresetNameInvalid          = "preset name must match [a-zA-Z0-9_-]{1,64}"
 	ErrPresetBodyRequired         = "preset body is required for PUT"
 	ErrPresetDispatchFailed       = "Failed to dispatch preset operation via NBI"
-	ErrEnabledRequired            = "enabled is required (true or false)"
+	// Provision scripts + virtual parameters (/provisions, /virtual-parameters)
+	ErrScriptNameInvalid  = "name must match [a-zA-Z0-9_-]{1,64}"
+	ErrScriptBodyRequired = "script body is required for PUT"
+	ErrScriptsListFailed  = "Failed to query GenieACS scripts collection"
+	ErrScriptSaveFailed   = "Failed to save script via NBI"
+	ErrScriptDeleteFailed = "Failed to delete script via NBI"
+	ErrEnabledRequired    = "enabled is required (true or false)"
 	// v2.2.0 — router web login accounts (/account/{ip})
 	ErrAccountPasswordRequired   = "password is required"
 	ErrAccountPasswordTooLong    = "password too long (max 64 chars)"
@@ -466,16 +472,20 @@ const (
 	// gosec G101 flags it as a "hardcoded credentials" false positive
 	// because the string contains the word "password".
 	//nolint:gosec // G101: success message for the admin-password endpoint, not an actual credential
-	MsgAdminPasswordUpdated = "Admin web password update dispatched."
-	MsgNTPUpdated           = "NTP / timezone update dispatched."
-	MsgDMZUpdated           = "DMZ host update dispatched."
-	MsgDDNSUpdated          = "DDNS update dispatched."
-	MsgPortFwdUpdated       = "Port forwarding rule update dispatched."
-	MsgStaticDHCPUpdated    = "Static DHCP lease update dispatched."
-	MsgWifiScheduleUpdated  = "WiFi schedule update dispatched."
-	MsgMacFilterUpdated     = "MAC filter update dispatched."
-	MsgTagsUpdated          = "Tag update dispatched via GenieACS NBI."
-	MsgPresetUpdated        = "Preset operation dispatched via GenieACS NBI."
+	MsgAdminPasswordUpdated    = "Admin web password update dispatched."
+	MsgNTPUpdated              = "NTP / timezone update dispatched."
+	MsgDMZUpdated              = "DMZ host update dispatched."
+	MsgDDNSUpdated             = "DDNS update dispatched."
+	MsgPortFwdUpdated          = "Port forwarding rule update dispatched."
+	MsgStaticDHCPUpdated       = "Static DHCP lease update dispatched."
+	MsgWifiScheduleUpdated     = "WiFi schedule update dispatched."
+	MsgMacFilterUpdated        = "MAC filter update dispatched."
+	MsgTagsUpdated             = "Tag update dispatched via GenieACS NBI."
+	MsgPresetUpdated           = "Preset operation dispatched via GenieACS NBI."
+	MsgProvisionSaved          = "Provision saved to GenieACS."
+	MsgProvisionDeleted        = "Provision deleted from GenieACS."
+	MsgVirtualParameterSaved   = "Virtual parameter saved to GenieACS."
+	MsgVirtualParameterDeleted = "Virtual parameter deleted from GenieACS."
 	// MsgAccountUpdated is a success message, not a credential.
 	//nolint:gosec // G101: success message for the account endpoint, not an actual credential
 	MsgAccountUpdated = "Router account credentials update dispatched."

@@ -344,6 +344,12 @@ func runServer(addr string) error {
 		r.Get("/presets/{name}", getPresetHandler)
 		r.Put("/presets/{name}", putPresetHandler)
 		r.Delete("/presets/{name}", deletePresetHandler)
+		r.Get("/provisions", listProvisionsHandler)
+		r.Put("/provisions/{name}", putProvisionHandler)
+		r.Delete("/provisions/{name}", deleteProvisionHandler)
+		r.Get("/virtual-parameters", listVirtualParametersHandler)
+		r.Put("/virtual-parameters/{name}", putVirtualParameterHandler)
+		r.Delete("/virtual-parameters/{name}", deleteVirtualParameterHandler)
 		// Device capability and WLAN management endpoints
 		r.Get("/capability/{ip}", getDeviceCapabilityHandler)
 		r.Get("/wlan/available/{ip}", getAvailableWLANHandler)

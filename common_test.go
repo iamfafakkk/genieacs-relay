@@ -155,6 +155,12 @@ func setupTestServer(t *testing.T, mockHandler http.Handler) (*httptest.Server, 
 		r.Get("/presets/{name}", getPresetHandler)
 		r.Put("/presets/{name}", putPresetHandler)
 		r.Delete("/presets/{name}", deletePresetHandler)
+		r.Get("/provisions", listProvisionsHandler)
+		r.Put("/provisions/{name}", putProvisionHandler)
+		r.Delete("/provisions/{name}", deleteProvisionHandler)
+		r.Get("/virtual-parameters", listVirtualParametersHandler)
+		r.Put("/virtual-parameters/{name}", putVirtualParameterHandler)
+		r.Delete("/virtual-parameters/{name}", deleteVirtualParameterHandler)
 	})
 	r.Get("/health", healthCheckHandler)
 
