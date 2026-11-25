@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 )
 
@@ -71,6 +72,10 @@ type DeviceSummary struct {
 	// vendor parameter tree the CPE exposes. Omitted when the device
 	// doesn't report optics (0 is the "not reported" sentinel).
 	RxPowerDbm float64 `json:"rx_power_dbm,omitempty"`
+
+	// Tags — GenieACS device tags (`_tags`), used to group devices by
+	// operator-defined labels.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // DevicesListResponse is the shape returned by GET /devices.
@@ -282,6 +287,7 @@ func devicesProjection() string {
 	parts := []string{
 		"_id",
 		"_lastInform",
+		"_tags",
 		"InternetGatewayDevice.DeviceInfo.Manufacturer",
 		"InternetGatewayDevice.DeviceInfo.ModelName",
 		"InternetGatewayDevice.DeviceInfo.SerialNumber",
@@ -340,6 +346,56 @@ func queryDevicesNBI(ctx context.Context, filter map[string]interface{}, limit, 
 	return out, nil
 }
 
+// deleteDeviceHandler removes a device document from GenieACS by device
+// ID. This is an ACS-side removal only: no TR-069 RPC is dispatched, so
+// the CPE itself is untouched and reappears in the collection if it
+// informs again.
+//
+//	@Summary		Delete a device
+//	@Description	Deletes the device document from GenieACS (NBI `DELETE /devices/{id}`). No TR-069 RPC is sent to the CPE; if the CPE informs the ACS again it reappears in the collection. Deleting an already-removed device still returns success.
+//	@Tags			Devices
+//	@Produce		json
+//	@Param			id	path		string	true	"URL-encoded GenieACS device ID"
+//	@Success		202	{object}	Response{data=MessageResponse}
+//	@Failure		401	{object}	Response
+//	@Failure		500	{object}	Response
+//	@Security		ApiKeyAuth
+//	@Router			/devices/{id} [delete]
+func deleteDeviceHandler(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	urlQ := fmt.Sprintf("%s/devices/%s", geniesBaseURL, url.PathEscape(deviceID))
+	//nolint:gosec // G107: URL built from trusted internal config (geniesBaseURL)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, urlQ, http.NoBody)
+	if err != nil {
+		sendError(w, r, http.StatusInternalServerError, ErrCodeInternal, ErrDeviceDeleteFailed)
+		return
+	}
+	if nbiAuth && nbiAuthKey != "" {
+		req.Header.Set(HeaderXAPIKey, nbiAuthKey)
+	}
+	// gosec G704: the device ID is path-escaped above before reaching
+	// this call.
+	//nolint:gosec // G704: path-escaped device ID
+	resp, err := nbiDo(req)
+	if err != nil {
+		logger.Error("Device DELETE failed", zap.String("device_id", deviceID), zap.Error(err))
+		sendError(w, r, http.StatusInternalServerError, ErrCodeGenieACS, ErrDeviceDeleteFailed)
+		return
+	}
+	defer safeClose(resp.Body)
+	// 404 = already gone; deletion is idempotent.
+	if resp.StatusCode >= http.StatusBadRequest && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		logger.Error("Device DELETE rejected",
+			zap.String("device_id", deviceID),
+			zap.String("status", resp.Status),
+			zap.String("body", string(body)))
+		sendError(w, r, http.StatusInternalServerError, ErrCodeGenieACS, ErrDeviceDeleteFailed)
+		return
+	}
+	sendResponse(w, http.StatusAccepted, MessageResponse{Message: MsgDeviceDeleted})
+}
+
 // deviceSummaryFromTree builds a DeviceSummary from a partial device
 // document returned by the GenieACS NBI projection.
 //
@@ -354,6 +410,17 @@ func deviceSummaryFromTree(doc map[string]interface{}) DeviceSummary {
 	}
 	if v, ok := doc["_lastInform"].(string); ok {
 		d.LastInform = v
+	}
+	if rawTags, ok := doc["_tags"].([]interface{}); ok {
+		tags := make([]string, 0, len(rawTags))
+		for _, t := range rawTags {
+			if s, ok := t.(string); ok && s != "" {
+				tags = append(tags, s)
+			}
+		}
+		if len(tags) > 0 {
+			d.Tags = tags
+		}
 	}
 	if v, ok := LookupString(doc, "InternetGatewayDevice.DeviceInfo.Manufacturer"); ok {
 		d.Manufacturer = v

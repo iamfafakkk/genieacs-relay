@@ -13,9 +13,9 @@
 
 <Sidebar.Provider>
 	<AppSidebar />
-	<Sidebar.Inset>
+	<Sidebar.Inset class="min-w-0">
 		<AppHeader />
-		<div class="flex flex-1 flex-col gap-4 p-4">
+		<div class="flex min-w-0 flex-1 flex-col gap-4 p-4">
 			{@render children()}
 		</div>
 	</Sidebar.Inset>

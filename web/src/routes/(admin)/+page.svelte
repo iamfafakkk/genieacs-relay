@@ -29,11 +29,18 @@
 
 	// Online = informed within the last 5 minutes (matches the device list).
 	const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+	const DAY_MS = 24 * 60 * 60 * 1000;
+
+	/** Milliseconds since last inform, or null when the device has no usable timestamp. */
+	function informAgeMs(device: DeviceSummary): number | null {
+		if (!device.last_inform) return null;
+		const t = new Date(device.last_inform).getTime();
+		return Number.isNaN(t) ? null : Date.now() - t;
+	}
 
 	function isOnline(device: DeviceSummary): boolean {
-		if (!device.last_inform) return false;
-		const t = new Date(device.last_inform).getTime();
-		return !Number.isNaN(t) && Date.now() - t < ONLINE_WINDOW_MS;
+		const age = informAgeMs(device);
+		return age !== null && age < ONLINE_WINDOW_MS;
 	}
 
 	async function load() {
@@ -89,6 +96,20 @@
 			}))
 			.sort((a, b) => b.total - a.total || a.ps.localeCompare(b.ps))
 	);
+
+	// Cumulative offline-duration buckets: devices silent for longer than N days
+	// are also silent for every smaller N.
+	const offlineByAge = $derived(
+		[3, 4, 5, 6, 7].map((days) => ({
+			days,
+			count: devices.filter((d) => {
+				const age = informAgeMs(d);
+				return age !== null && age > days * DAY_MS;
+			}).length
+		}))
+	);
+	// Offline devices without a last inform timestamp cannot be aged.
+	const offlineUnknownAge = $derived(devices.filter((d) => informAgeMs(d) === null).length);
 
 	// Top models by device count.
 	const byModel = $derived(
@@ -224,6 +245,40 @@
 			</Card.Footer>
 		</Card.Root>
 	</div>
+
+	<Card.Root>
+		<Card.Header class="flex-row items-center justify-between gap-2 space-y-0">
+			<div>
+				<Card.Title>Offline Duration</Card.Title>
+				<Card.Description>
+					Devices that have not informed in more than the given number of days.
+					{#if offlineUnknownAge > 0}
+						{offlineUnknownAge} offline device{offlineUnknownAge === 1 ? '' : 's'} have no inform timestamp.
+					{/if}
+				</Card.Description>
+			</div>
+			<WifiOffIcon class="text-muted-foreground size-4" />
+		</Card.Header>
+		<Card.Content>
+			{#if refreshing && !loaded}
+				<Skeleton class="h-24 w-full" />
+			{:else}
+				<div class="flex flex-col gap-1">
+					{#each offlineByAge as bucket (bucket.days)}
+						<a
+							class="hover:bg-muted/50 -mx-2 flex items-center justify-between gap-2 rounded-md px-2 py-2 transition-colors"
+							href={`/devices?offline=${bucket.days}`}
+						>
+							<span class="text-sm">More than {bucket.days} days</span>
+							<Badge variant="outline" class="border-destructive/50 text-destructive">
+								{bucket.count}
+							</Badge>
+						</a>
+					{/each}
+				</div>
+			{/if}
+		</Card.Content>
+	</Card.Root>
 
 	<Card.Root>
 		<Card.Header class="flex-row items-center justify-between gap-2 space-y-0">

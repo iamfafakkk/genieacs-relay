@@ -362,6 +362,7 @@ const (
 	ErrDevicesPageInvalid       = "page must be >= 1"
 	ErrDevicesPageSizeInvalid   = "page_size must be between 1 and 200"
 	ErrDevicesNotFound          = "No devices match the requested query"
+	ErrDeviceDeleteFailed       = "Failed to delete device from GenieACS"
 	ErrDiagDispatchFailed       = "Failed to dispatch TR-069 diagnostic task"
 	ErrDiagInvalidHost          = "host is required and must be a valid hostname or IP"
 	ErrDiagInvalidCount         = "count must be between 1 and 64"
@@ -459,6 +460,7 @@ const (
 	MsgQoSUpdated            = "QoS rate-limit update dispatched. Device will apply new rates within 30s."
 	MsgBridgeModeUpdated     = "Bridge mode toggle dispatched. Device will reconfigure WAN within 30s."
 	MsgDevicesQueried        = "Devices query completed."
+	MsgDeviceDeleted         = "Device deleted from GenieACS."
 	MsgDiagDispatched        = "Diagnostic task dispatched. Poll /params/{ip} for the diagnostic result paths after 5-15 seconds."
 	// MsgAdminPasswordUpdated is a success message, not a credential.
 	// gosec G101 flags it as a "hardcoded credentials" false positive

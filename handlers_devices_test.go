@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -203,6 +204,7 @@ func TestDeviceSummaryFromTree_Full(t *testing.T) {
 	doc := map[string]interface{}{
 		"_id":         "device-001",
 		"_lastInform": "2026-04-14T11:35:21Z",
+		"_tags":       []interface{}{"olt-cakra", "vip"},
 		"InternetGatewayDevice": map[string]interface{}{
 			"DeviceInfo": map[string]interface{}{
 				"Manufacturer": map[string]interface{}{"_value": "ZTE"},
@@ -241,6 +243,19 @@ func TestDeviceSummaryFromTree_Full(t *testing.T) {
 	assert.Equal(t, "SN-12345", d.Serial)
 	assert.Equal(t, "203.0.113.45", d.IP)
 	assert.Equal(t, "AA:BB:CC:DD:EE:FF", d.MAC)
+	assert.Equal(t, []string{"olt-cakra", "vip"}, d.Tags)
+}
+
+func TestDeviceSummaryFromTree_TagsSkipsInvalidEntries(t *testing.T) {
+	d := deviceSummaryFromTree(map[string]interface{}{
+		"_tags": []interface{}{"keep", "", 42},
+	})
+	assert.Equal(t, []string{"keep"}, d.Tags)
+}
+
+func TestDeviceSummaryFromTree_TagsIgnoredWhenNotArray(t *testing.T) {
+	d := deviceSummaryFromTree(map[string]interface{}{"_tags": "not-an-array"})
+	assert.Nil(t, d.Tags)
 }
 
 // TestWanIP_PrefersPPPOverIP covers the production case where a single
@@ -683,4 +698,72 @@ func TestQueryDevicesNBI_NewRequestFailure(t *testing.T) {
 
 	_, err := queryDevicesNBI(context.Background(), nil, 10, 0)
 	assert.Error(t, err)
+}
+
+// --- deleteDeviceHandler ---
+
+func TestDeleteDeviceHandler_Success(t *testing.T) {
+	var gotMethod, gotPath string
+	_, router := setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.EscapedPath()
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	deviceID := "781D4A-ZXHN F477-01AB"
+	req := httptest.NewRequest(http.MethodDelete,
+		"/api/v1/genieacs/devices/"+url.PathEscape(deviceID), http.NoBody)
+	req.Header.Set("X-API-Key", mockAPIKey)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusAccepted, rr.Code)
+	assert.Equal(t, http.MethodDelete, gotMethod)
+	assert.Equal(t, "/devices/"+url.PathEscape(deviceID), gotPath)
+	assert.Contains(t, rr.Body.String(), MsgDeviceDeleted)
+}
+
+func TestDeleteDeviceHandler_AlreadyGone(t *testing.T) {
+	_, router := setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/genieacs/devices/device-001", http.NoBody)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusAccepted, rr.Code)
+}
+
+func TestDeleteDeviceHandler_NBIFailure(t *testing.T) {
+	_, router := setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"boom"}`))
+	}))
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/genieacs/devices/device-001", http.NoBody)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrDeviceDeleteFailed)
+}
+
+func TestDeleteDeviceHandler_TransportError(t *testing.T) {
+	mockServer, router := setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	mockServer.Close()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/genieacs/devices/device-001", http.NoBody)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
+func TestDeleteDeviceHandler_NewRequestFailure(t *testing.T) {
+	_, router := setupTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	originalBase := geniesBaseURL
+	geniesBaseURL = "http://example.com/\x7f"
+	t.Cleanup(func() { geniesBaseURL = originalBase })
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/genieacs/devices/device-001", http.NoBody)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 }

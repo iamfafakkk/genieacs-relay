@@ -13,6 +13,8 @@ export interface DeviceSummary {
 	pppoe_username?: string;
 	/** Optical receive power in dBm; absent when the CPE reports no optics. */
 	rx_power_dbm?: number;
+	/** GenieACS device tags (`_tags`). */
+	tags?: string[];
 }
 
 export interface DevicesListResponse {

@@ -324,6 +324,7 @@ func runServer(addr string) error {
 		// v2.2.0 — devices collection query (M4, M5)
 		r.Get("/devices", listDevicesHandler)
 		r.Get("/devices/search", searchDevicesHandler)
+		r.Delete("/devices/{id}", deleteDeviceHandler)
 		// worker job monitoring (admin panel "Jobs" page + sonner notifications)
 		r.Get("/jobs", listJobsHandler)
 		r.Get("/jobs/ws", jobsStreamHandler)

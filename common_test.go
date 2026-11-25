@@ -139,6 +139,7 @@ func setupTestServer(t *testing.T, mockHandler http.Handler) (*httptest.Server, 
 		r.Get("/wifi-stats/{ip}", getWifiStatsHandler)
 		r.Get("/devices", listDevicesHandler)
 		r.Get("/devices/search", searchDevicesHandler)
+		r.Delete("/devices/{id}", deleteDeviceHandler)
 		r.Post("/diag/ping/{ip}", dispatchPingHandler)
 		r.Post("/diag/traceroute/{ip}", dispatchTraceRouteHandler)
 		// v2.2.0 Phase 4 (LOW)
